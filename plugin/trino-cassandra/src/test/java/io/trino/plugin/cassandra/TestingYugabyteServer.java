@@ -13,8 +13,11 @@
  */
 package io.trino.plugin.cassandra;
 
-import com.datastax.driver.core.Cluster;
-import com.google.common.collect.ImmutableList;
+import com.datastax.oss.driver.api.core.CqlSession;
+import com.datastax.oss.driver.api.core.CqlSessionBuilder;
+import com.datastax.oss.driver.api.core.ProtocolVersion;
+import com.datastax.oss.driver.api.core.config.DriverConfigLoader;
+import com.datastax.oss.driver.api.core.config.ProgrammaticDriverConfigLoaderBuilder;
 import io.airlift.json.JsonCodec;
 import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.utility.DockerImageName;
@@ -23,8 +26,11 @@ import java.io.Closeable;
 import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.time.Duration;
+import java.util.List;
 
-import static com.datastax.driver.core.ProtocolVersion.V3;
+import static com.datastax.oss.driver.api.core.config.DefaultDriverOption.CONTROL_CONNECTION_AGREEMENT_TIMEOUT;
+import static com.datastax.oss.driver.api.core.config.DefaultDriverOption.METADATA_SCHEMA_REFRESHED_KEYSPACES;
+import static com.datastax.oss.driver.api.core.config.DefaultDriverOption.PROTOCOL_VERSION;
 import static java.util.Objects.requireNonNull;
 import static java.util.concurrent.TimeUnit.DAYS;
 import static java.util.concurrent.TimeUnit.MINUTES;
@@ -51,17 +57,21 @@ public class TestingYugabyteServer
                 .withExposedPorts(PORT);
         dockerContainer.start();
 
-        Cluster.Builder clusterBuilder = Cluster.builder()
-                .withProtocolVersion(V3)
-                .withClusterName("TestCluster")
-                .addContactPointsWithPorts(ImmutableList.of(
-                        new InetSocketAddress(dockerContainer.getContainerIpAddress(), dockerContainer.getMappedPort(PORT))))
-                .withMaxSchemaAgreementWaitSeconds(30);
+        ProgrammaticDriverConfigLoaderBuilder driverConfigLoaderBuilder = DriverConfigLoader.programmaticBuilder();
+        driverConfigLoaderBuilder.withString(PROTOCOL_VERSION, ProtocolVersion.V3.name());
+        driverConfigLoaderBuilder.withDuration(CONTROL_CONNECTION_AGREEMENT_TIMEOUT, java.time.Duration.ofSeconds(30));
+        // allow the retrieval of metadata for the system keyspaces
+        driverConfigLoaderBuilder.withStringList(METADATA_SCHEMA_REFRESHED_KEYSPACES, List.of());
 
-        ReopeningCluster cluster = new ReopeningCluster(clusterBuilder::build, new io.airlift.units.Duration(Long.MAX_VALUE, DAYS));
+        CqlSessionBuilder cqlSessionBuilder = CqlSession.builder()
+                .withApplicationName("TestCluster")
+                .addContactPoint(new InetSocketAddress(this.dockerContainer.getContainerIpAddress(), this.dockerContainer.getMappedPort(PORT)))
+                .withLocalDatacenter("datacenter1")
+                .withConfigLoader(driverConfigLoaderBuilder.build());
+
         session = new CassandraSession(
                 JsonCodec.listJsonCodec(ExtraColumnMetadata.class),
-                cluster,
+                cqlSessionBuilder::build,
                 new io.airlift.units.Duration(Long.MAX_VALUE, DAYS),
                 new io.airlift.units.Duration(1, MINUTES));
     }

@@ -13,10 +13,13 @@
  */
 package io.trino.plugin.cassandra;
 
-import com.datastax.driver.core.Cluster;
-import com.datastax.driver.core.ResultSet;
-import com.datastax.driver.core.Row;
-import com.google.common.collect.ImmutableList;
+import com.datastax.oss.driver.api.core.CqlSession;
+import com.datastax.oss.driver.api.core.CqlSessionBuilder;
+import com.datastax.oss.driver.api.core.ProtocolVersion;
+import com.datastax.oss.driver.api.core.config.DriverConfigLoader;
+import com.datastax.oss.driver.api.core.config.ProgrammaticDriverConfigLoaderBuilder;
+import com.datastax.oss.driver.api.core.cql.ResultSet;
+import com.datastax.oss.driver.api.core.cql.Row;
 import com.google.common.io.Resources;
 import io.airlift.json.JsonCodec;
 import io.airlift.log.Logger;
@@ -32,7 +35,9 @@ import java.nio.file.Path;
 import java.util.List;
 import java.util.concurrent.TimeoutException;
 
-import static com.datastax.driver.core.ProtocolVersion.V3;
+import static com.datastax.oss.driver.api.core.config.DefaultDriverOption.CONTROL_CONNECTION_AGREEMENT_TIMEOUT;
+import static com.datastax.oss.driver.api.core.config.DefaultDriverOption.METADATA_SCHEMA_REFRESHED_KEYSPACES;
+import static com.datastax.oss.driver.api.core.config.DefaultDriverOption.PROTOCOL_VERSION;
 import static com.google.common.io.Files.createTempDir;
 import static com.google.common.io.Files.write;
 import static com.google.common.io.Resources.getResource;
@@ -74,17 +79,21 @@ public class CassandraServer
                 .withCopyFileToContainer(forHostPath(prepareCassandraYaml()), "/etc/cassandra/cassandra.yaml");
         this.dockerContainer.start();
 
-        Cluster.Builder clusterBuilder = Cluster.builder()
-                .withProtocolVersion(V3)
-                .withClusterName("TestCluster")
-                .addContactPointsWithPorts(ImmutableList.of(
-                        new InetSocketAddress(this.dockerContainer.getContainerIpAddress(), this.dockerContainer.getMappedPort(PORT))))
-                .withMaxSchemaAgreementWaitSeconds(30);
+        ProgrammaticDriverConfigLoaderBuilder driverConfigLoaderBuilder = DriverConfigLoader.programmaticBuilder();
+        driverConfigLoaderBuilder.withString(PROTOCOL_VERSION, ProtocolVersion.V3.name());
+        driverConfigLoaderBuilder.withDuration(CONTROL_CONNECTION_AGREEMENT_TIMEOUT, java.time.Duration.ofSeconds(30));
+        // allow the retrieval of metadata for the system keyspaces
+        driverConfigLoaderBuilder.withStringList(METADATA_SCHEMA_REFRESHED_KEYSPACES, List.of());
 
-        ReopeningCluster cluster = new ReopeningCluster(clusterBuilder::build, new Duration(Long.MAX_VALUE, DAYS));
+        CqlSessionBuilder cqlSessionBuilder = CqlSession.builder()
+                .withApplicationName("TestCluster")
+                .addContactPoint(new InetSocketAddress(this.dockerContainer.getContainerIpAddress(), this.dockerContainer.getMappedPort(PORT)))
+                .withLocalDatacenter("datacenter1")
+                .withConfigLoader(driverConfigLoaderBuilder.build());
+
         CassandraSession session = new CassandraSession(
                 JsonCodec.listJsonCodec(ExtraColumnMetadata.class),
-                cluster,
+                cqlSessionBuilder::build,
                 new Duration(Long.MAX_VALUE, DAYS),
                 new Duration(1, MINUTES));
 
@@ -92,7 +101,7 @@ public class CassandraServer
             checkConnectivity(session);
         }
         catch (RuntimeException e) {
-            cluster.close();
+            session.close();
             this.dockerContainer.stop();
             throw e;
         }

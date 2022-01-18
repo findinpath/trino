@@ -31,7 +31,6 @@ import org.testng.SkipException;
 import org.testng.annotations.Test;
 
 import java.math.BigInteger;
-import java.nio.ByteBuffer;
 import java.sql.Timestamp;
 import java.time.ZoneId;
 import java.time.ZonedDateTime;
@@ -39,7 +38,7 @@ import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.ThreadLocalRandom;
 
-import static com.datastax.driver.core.utils.Bytes.toRawHexString;
+import static com.google.common.io.BaseEncoding.base16;
 import static io.trino.plugin.cassandra.CassandraQueryRunner.createCassandraQueryRunner;
 import static io.trino.plugin.cassandra.CassandraQueryRunner.createCassandraSession;
 import static io.trino.plugin.cassandra.CassandraTestingUtils.TABLE_ALL_TYPES;
@@ -248,8 +247,7 @@ public class TestCassandraConnectorTest
                 " AND typesmallint = 7" +
                 " AND typeinteger = 7" +
                 " AND typelong = 1007" +
-                " AND typebytes = from_hex('" + toRawHexString(ByteBuffer.wrap(Ints.toByteArray(7))) + "')" +
-                " AND typedate = DATE '1970-01-01'" +
+                " AND typebytes = from_hex('" + base16().encode(Ints.toByteArray(7)) + "')" +
                 " AND typetimestamp = TIMESTAMP '1970-01-01 03:04:05Z'" +
                 " AND typeansi = 'ansi 7'" +
                 " AND typeboolean = false" +
