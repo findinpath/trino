@@ -310,6 +310,7 @@ jobs:
             !:trino-accumulo,
             !:trino-cassandra,
             !:trino-clickhouse,
+            !:trino-delta-lake,
             !:trino-hive,
             !:trino-elasticsearch,
             !:trino-mongodb,
@@ -380,6 +381,7 @@ jobs:
             - { modules: plugin/trino-accumulo }
             - { modules: plugin/trino-cassandra }
             - { modules: plugin/trino-clickhouse }
+            - { modules: plugin/trino-delta-lake }
             - { modules: plugin/trino-hive }
             - { modules: plugin/trino-hive, profile: test-parquet }
             - { modules: plugin/trino-hive, profile: test-failure-recovery }
@@ -437,9 +439,19 @@ jobs:
           export MAVEN_OPTS="${MAVEN_INSTALL_OPTS}"
           $RETRY $MAVEN install ${MAVEN_FAST_INSTALL} -am -pl "${{ matrix.modules }}"
       - name: Maven Tests
-        if: matrix.modules != 'plugin/trino-memsql'
+        if: matrix.modules != 'plugin/trino-memsql' && matrix.modules != 'plugin/trino-delta-lake'
         run: $MAVEN test ${MAVEN_TEST} -pl ${{ matrix.modules }} ${{ matrix.profile != '' && format('-P {0}', matrix.profile) || '' }}
       # Additional tests for selected modules
+      - name: Delta Lake Tests
+        env:
+          ABFS_CONTAINER: ${{ secrets.AZURE_ABFS_CONTAINER }}
+          ABFS_ACCOUNT: ${{ secrets.AZURE_ABFS_ACCOUNT }}
+          ABFS_ACCESS_KEY: ${{ secrets.AZURE_ABFS_ACCESSKEY }}
+        if: matrix.modules == 'plugin/trino-delta-lake'
+        # TODO: Restore condition above: && env.ABFS_ACCOUNT != '' && env.ABFS_CONTAINER != '' && env.ABFS_ACCESS_KEY != ''
+        run: |
+          # TODO: Split this onto multiple lines
+          $MAVEN test ${MAVEN_TEST} -pl :trino-delta-lake -Dhive.hadoop2.azure-abfs-container="${ABFS_CONTAINER:?ABFS container empty or unset}" -Dhive.hadoop2.azure-abfs-account="${ABFS_ACCOUNT:?ABFS account empty or unset}" -Dhive.hadoop2.azure-abfs-access-key="${ABFS_ACCESS_KEY:?ABFS access key empty or unset}"
       - name: Memsql Tests
         env:
           MEMSQL_LICENSE: ${{ secrets.MEMSQL_LICENSE }}
