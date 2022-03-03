@@ -312,48 +312,6 @@ public abstract class BaseDeltaLakeConnectorSmokeTest
         queryRunner.execute(format("DROP TABLE hive.%s.%s", SCHEMA, hiveTableName));
     }
 
-    private OperatorStats getScanFilterAndProjectOperatorStats(QueryId queryId, String tableName)
-    {
-        Plan plan = getDistributedQueryRunner().getQueryPlan(queryId);
-        PlanNodeId nodeId = PlanNodeSearcher.searchFrom(plan.getRoot())
-                .where(node -> { //we want either ProjectNode -> FilterNode -> TableScanNode or ProjectNode -> TableScanNode
-                    if (!(node instanceof ProjectNode)) {
-                        return false;
-                    }
-                    ProjectNode projectNode = (ProjectNode) node;
-                    if (!(projectNode.getSource() instanceof FilterNode) && !(projectNode.getSource() instanceof TableScanNode)) {
-                        return false;
-                    }
-                    TableScanNode tableScanNode;
-                    if (projectNode.getSource() instanceof FilterNode) {
-                        FilterNode filterNode = (FilterNode) projectNode.getSource();
-                        if (!(filterNode.getSource() instanceof TableScanNode)) {
-                            return false;
-                        }
-                        else {
-                            tableScanNode = (TableScanNode) filterNode.getSource();
-                        }
-                    }
-                    else {
-                        tableScanNode = (TableScanNode) projectNode.getSource();
-                    }
-
-                    return ((DeltaLakeTableHandle) tableScanNode.getTable().getConnectorHandle()).getSchemaTableName()
-                            .equals(new SchemaTableName(SCHEMA, tableName));
-                })
-                .findOnlyElement()
-                .getId();
-
-        return getDistributedQueryRunner().getCoordinator()
-                .getQueryManager()
-                .getFullQueryInfo(queryId)
-                .getQueryStats()
-                .getOperatorSummaries()
-                .stream()
-                .filter(summary -> nodeId.equals(summary.getPlanNodeId()) && summary.getOperatorType().equals("ScanFilterAndProjectOperator"))
-                .collect(onlyElement());
-    }
-
     @Test
     public void testHiddenColumns()
     {

@@ -47,7 +47,6 @@ import io.trino.plugin.deltalake.transactionlog.writer.TransactionLogWriter;
 import io.trino.plugin.deltalake.transactionlog.writer.TransactionLogWriterFactory;
 import io.trino.plugin.hive.HdfsEnvironment;
 import io.trino.plugin.hive.HdfsEnvironment.HdfsContext;
-import io.trino.plugin.hive.HiveColumnHandle;
 import io.trino.plugin.hive.HiveType;
 import io.trino.plugin.hive.metastore.Column;
 import io.trino.plugin.hive.metastore.Database;
@@ -116,7 +115,6 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
-import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Stream;
 
@@ -126,7 +124,6 @@ import static com.google.common.base.Verify.verify;
 import static com.google.common.collect.ImmutableList.toImmutableList;
 import static com.google.common.collect.ImmutableMap.toImmutableMap;
 import static com.google.common.collect.ImmutableSet.toImmutableSet;
-import static io.trino.plugin.deltalake.DeltaHiveTypeTranslator.toHiveType;
 import static io.trino.plugin.deltalake.DeltaLakeColumnHandle.FILE_MODIFIED_TIME_COLUMN_NAME;
 import static io.trino.plugin.deltalake.DeltaLakeColumnHandle.ROW_ID_COLUMN_NAME;
 import static io.trino.plugin.deltalake.DeltaLakeColumnHandle.ROW_ID_COLUMN_TYPE;
@@ -621,21 +618,6 @@ public class DeltaLakeMetadata
                 session,
                 table,
                 principalPrivileges);
-    }
-
-    private static List<HiveColumnHandle> getHiveColumnHandles(ConnectorTableMetadata tableMetadata)
-    {
-        AtomicInteger ordinal = new AtomicInteger(-1);
-        return tableMetadata.getColumns().stream()
-                .map(column -> new HiveColumnHandle(
-                        column.getName(),
-                        ordinal.addAndGet(1),
-                        toHiveType(column.getType()),
-                        column.getType(),
-                        Optional.empty(),
-                        HiveColumnHandle.ColumnType.REGULAR,
-                        Optional.ofNullable(column.getComment())))
-                .collect(toImmutableList());
     }
 
     private static Map<String, String> deltaTableProperties(ConnectorSession session, String location, boolean external)
