@@ -59,6 +59,7 @@ import java.io.File;
 import java.io.IOException;
 import java.net.URI;
 import java.net.URISyntaxException;
+import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -69,8 +70,6 @@ import java.util.function.Consumer;
 import static com.google.common.base.Verify.verify;
 import static com.google.common.collect.ImmutableList.toImmutableList;
 import static com.google.common.collect.ImmutableSet.toImmutableSet;
-import static com.google.common.io.MoreFiles.deleteRecursively;
-import static com.google.common.io.RecursiveDeleteOption.ALLOW_INSECURE;
 import static io.airlift.testing.Closeables.closeAll;
 import static io.trino.plugin.deltalake.DeltaLakeMetadata.DELTA_STORAGE_FORMAT;
 import static io.trino.plugin.deltalake.DeltaLakeTableProperties.LOCATION_PROPERTY;
@@ -85,11 +84,14 @@ import static io.trino.spi.security.PrincipalType.ROLE;
 import static io.trino.testing.TestingConnectorSession.SESSION;
 import static java.lang.String.format;
 import static java.lang.System.currentTimeMillis;
+import static java.nio.file.Files.createTempDirectory;
+import static java.nio.file.Files.exists;
 import static java.util.Locale.ENGLISH;
 import static java.util.concurrent.TimeUnit.DAYS;
 import static org.apache.hadoop.hive.metastore.TableType.EXTERNAL_TABLE;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Fail.fail;
 
 public class TestDeltaLakeGlueMetastore
 {
@@ -97,7 +99,7 @@ public class TestDeltaLakeGlueMetastore
 
     private static final String TEST_DATABASE_NAME_PREFIX = "test_delta_glue";
 
-    private File tempDir;
+    private Path tempDir;
     private LifeCycleManager lifeCycleManager;
     private GlueHiveMetastore metastoreClient;
     private DeltaLakeMetadataFactory metadataFactory;
@@ -107,9 +109,10 @@ public class TestDeltaLakeGlueMetastore
 
     @BeforeClass
     public void setUp()
+            throws IOException
     {
-        tempDir = Files.createTempDir();
-        String temporaryLocation = tempDir.toURI().toString();
+        tempDir = createTempDirectory("delta-glue");
+        String temporaryLocation = tempDir.toString();
 
         Map<String, String> config = ImmutableMap.<String, String>builder()
                 .put("hive.metastore", "glue")
@@ -164,14 +167,12 @@ public class TestDeltaLakeGlueMetastore
     {
         closeAll(
                 () -> metastoreClient.dropDatabase(databaseName, true),
-                () -> lifeCycleManager.stop(),
-                () -> {
-                    if (tempDir.exists()) {
-                        deleteRecursively(tempDir.toPath(), ALLOW_INSECURE);
-                    }
-                });
+                () -> lifeCycleManager.stop());
 
         cleanupOrphanedDatabases();
+        if (exists(tempDir)) {
+            fail(format("The %s directory should have been already deleted along with the database %s", tempDir, databaseName));
+        }
         databaseName = null;
         lifeCycleManager = null;
     }
@@ -275,7 +276,7 @@ public class TestDeltaLakeGlueMetastore
 
     private String tableLocation(SchemaTableName tableName)
     {
-        return new File(tempDir, tableName.getTableName()).toURI().toString();
+        return new File(tempDir.toFile(), tableName.getTableName()).toURI().toString();
     }
 
     private void createTable(SchemaTableName tableName, String tableLocation, Consumer<Table.Builder> tableConfiguration)
