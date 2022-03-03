@@ -375,7 +375,7 @@ public class DeltaLakePageSink
                 partitionName = Optional.of(partName);
             }
 
-            String fileName = randomUUID().toString(); // TODO: Use Spark naming pattern (part-####-UUID-c000.snappy.parquet)
+            String fileName = randomUUID().toString();
             filePath = new Path(filePath, fileName);
 
             FileWriter fileWriter;

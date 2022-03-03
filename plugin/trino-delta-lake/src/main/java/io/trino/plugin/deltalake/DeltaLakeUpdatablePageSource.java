@@ -477,7 +477,7 @@ public class DeltaLakeUpdatablePageSource
 
     private Path getPathForNewFile()
     {
-        String targetFilename = session.getQueryId() + "_" + randomUUID().toString(); // TODO: Use Spark naming pattern (part-####-UUID-c000.snappy.parquet)
+        String targetFilename = session.getQueryId() + "_" + randomUUID();
         Path dataDirectory = new Path(path).getParent();
         return new Path(dataDirectory, targetFilename);
     }
