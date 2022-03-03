@@ -30,6 +30,7 @@ public class DeltaLakeConnectorFactory
 {
     public static final String CONNECTOR_NAME = "delta-lake";
 
+    // Note: due to classloader isolation, in production extensions must be empty
     private final Optional<Module> extensions;
 
     public DeltaLakeConnectorFactory(Optional<Module> extensions)

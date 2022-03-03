@@ -32,8 +32,7 @@ public enum DeltaLakeErrorCode
 
     DeltaLakeErrorCode(int code, ErrorType type)
     {
-        // TODO: Pick unused number for base error code
-        errorCode = new ErrorCode(code + 0x0505_0000, name(), type);
+        errorCode = new ErrorCode(code + 0x0506_0000, name(), type);
     }
 
     @Override
