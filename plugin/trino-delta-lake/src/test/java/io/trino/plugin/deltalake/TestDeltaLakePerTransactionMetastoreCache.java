@@ -181,7 +181,7 @@ public class TestDeltaLakePerTransactionMetastoreCache
             deltaLakeProperties.put("hive.per-transaction-metastore-cache-maximum-size", "1");
         }
 
-        queryRunner.createCatalog(DELTA_CATALOG, TEST_DELTA_CONNECTOR_NAME, deltaLakeProperties.build());
+        queryRunner.createCatalog(DELTA_CATALOG, TEST_DELTA_CONNECTOR_NAME, deltaLakeProperties.buildOrThrow());
 
         if (createdDeltaLake) {
             List<TpchTable<? extends TpchEntity>> tpchTables = List.of(TpchTable.NATION, TpchTable.REGION);

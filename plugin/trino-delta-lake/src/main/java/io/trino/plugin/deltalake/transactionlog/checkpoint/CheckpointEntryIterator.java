@@ -159,7 +159,7 @@ public class CheckpointEntryIterator
                 .put(METADATA, this::buildMetadataEntry)
                 .put(PROTOCOL, this::buildProtocolEntry)
                 .put(COMMIT, this::buildCommitInfoEntry)
-                .build();
+                .buildOrThrow();
         // ADD requires knowing the metadata in order to figure out the Parquet schema
         if (fields.contains(ADD)) {
             checkArgument(metadataEntry.isPresent(), "Metadata entry must be provided when reading ADD entries from Checkpoint files");
@@ -468,7 +468,7 @@ public class CheckpointEntryIterator
             }
             values.put(name, readNativeValue(type, valuesBlock, i));
         }
-        return values.build();
+        return values.buildOrThrow();
     }
 
     private Map<String, Object> readNullCount(Block block, int blockPosition, List<ColumnMetadata> columns)
@@ -497,7 +497,7 @@ public class CheckpointEntryIterator
 
             values.put(metadata.getName(), getLong(valuesBlock, i));
         }
-        return values.build();
+        return values.buildOrThrow();
     }
 
     private DeltaLakeTransactionLogEntry buildTxnEntry(ConnectorSession session, Block block, int pagePosition)

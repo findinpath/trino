@@ -34,7 +34,7 @@ public class TestDeltaLakeOptimizedWriterConnectorSmokeTest
                         .putAll(connectorProperties)
                         .put("parquet.experimental-optimized-writer.enabled", "true")
                         .put("delta.enable-non-concurrent-writes", "true")
-                        .build(),
+                        .buildOrThrow(),
                 dockerizedMinioDataLake.getMinioAddress(),
                 dockerizedMinioDataLake.getTestingHadoop());
     }

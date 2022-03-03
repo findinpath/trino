@@ -57,7 +57,7 @@ public class TestDeltaLakeConnectorSmokeTest
                 ImmutableMap.<String, String>builder()
                         .putAll(connectorProperties)
                         .put("delta.enable-non-concurrent-writes", "true")
-                        .build(),
+                        .buildOrThrow(),
                 dockerizedMinioDataLake.getMinioAddress(),
                 dockerizedMinioDataLake.getTestingHadoop());
     }

@@ -196,7 +196,7 @@ public class DeltaLakeWriter
             }
         }
 
-        return mergeStats(metadataForColumn.build(), typeForColumn.build(), rowCount);
+        return mergeStats(metadataForColumn.build(), typeForColumn.buildOrThrow(), rowCount);
     }
 
     @VisibleForTesting

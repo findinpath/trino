@@ -42,7 +42,7 @@ public class DeltaLakeSchemaProperties
         ImmutableMap.Builder<String, Object> result = ImmutableMap.builder();
         db.getLocation().ifPresent(location -> result.put(LOCATION_PROPERTY, location));
 
-        return result.build();
+        return result.buildOrThrow();
     }
 
     public static Optional<String> getLocation(Map<String, Object> schemaProperties)

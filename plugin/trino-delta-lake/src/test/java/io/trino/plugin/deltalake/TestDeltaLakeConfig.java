@@ -76,7 +76,7 @@ public class TestDeltaLakeConfig
                 .put("delta.table-statistics-enabled", "false")
                 .put("delta.extended-statistics.enabled", "false")
                 .put("delta.compression-codec", "GZIP")
-                .build();
+                .buildOrThrow();
 
         DeltaLakeConfig expected = new DeltaLakeConfig()
                 .setDataFileCacheSize(DataSize.succinctBytes(0))

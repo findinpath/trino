@@ -88,7 +88,7 @@ public abstract class AbstractTestDeltaLakeCreateTableStatistics
         QueryRunner queryRunner = DeltaLakeQueryRunner.createS3DeltaLakeQueryRunner(
                 DELTA_CATALOG,
                 SCHEMA,
-                queryRunnerProperties.build(),
+                queryRunnerProperties.buildOrThrow(),
                 dockerizedMinioDataLake.getMinioAddress(),
                 dockerizedMinioDataLake.getTestingHadoop());
 

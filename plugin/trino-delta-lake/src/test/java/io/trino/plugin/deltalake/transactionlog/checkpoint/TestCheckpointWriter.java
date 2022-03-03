@@ -222,7 +222,7 @@ public class TestCheckpointWriter
                                 .put("dou", 0.101d)
                                 .put("dat", (long) parseDate("2000-01-01"))
                                 .put("row", RowBlock.fromFieldBlocks(1, Optional.empty(), minMaxRowFieldBlocks).getSingleValueBlock(0))
-                                .build()),
+                                .buildOrThrow()),
                         Optional.of(ImmutableMap.<String, Object>builder()
                                 .put("ts", DateTimeUtils.convertToTimestampWithTimeZone(UTC_KEY, "2060-10-31 02:00:00"))
                                 .put("str", utf8Slice("a"))
@@ -236,7 +236,7 @@ public class TestCheckpointWriter
                                 .put("dou", 0.202d)
                                 .put("dat", (long) parseDate("3000-01-01"))
                                 .put("row", RowBlock.fromFieldBlocks(1, Optional.empty(), minMaxRowFieldBlocks).getSingleValueBlock(0))
-                                .build()),
+                                .buildOrThrow()),
                         Optional.of(ImmutableMap.<String, Object>builder()
                                 .put("ts", 1L)
                                 .put("str", 2L)
@@ -253,7 +253,7 @@ public class TestCheckpointWriter
                                 .put("dat", 13L)
                                 .put("arr", 14L)
                                 .put("row", RowBlock.fromFieldBlocks(1, Optional.empty(), nullCountRowFieldBlocks).getSingleValueBlock(0))
-                                .build()))),
+                                .buildOrThrow()))),
                 ImmutableMap.of(
                         "someTag", "someValue",
                         "otherTag", "otherValue"));
@@ -328,13 +328,13 @@ public class TestCheckpointWriter
                         Optional.of(5L),
                         Optional.of(ImmutableMap.<String, Object>builder()
                                 .put("row", RowBlock.fromFieldBlocks(1, Optional.empty(), minMaxRowFieldBlocks).getSingleValueBlock(0))
-                                .build()),
+                                .buildOrThrow()),
                         Optional.of(ImmutableMap.<String, Object>builder()
                                 .put("row", RowBlock.fromFieldBlocks(1, Optional.empty(), minMaxRowFieldBlocks).getSingleValueBlock(0))
-                                .build()),
+                                .buildOrThrow()),
                         Optional.of(ImmutableMap.<String, Object>builder()
                                 .put("row", RowBlock.fromFieldBlocks(1, Optional.empty(), nullCountRowFieldBlocks).getSingleValueBlock(0))
-                                .build()))),
+                                .buildOrThrow()))),
                 ImmutableMap.of());
 
         CheckpointEntries entries = new CheckpointEntries(
@@ -410,7 +410,7 @@ public class TestCheckpointWriter
             }
         }
 
-        return Optional.of(comparableStats.build());
+        return Optional.of(comparableStats.buildOrThrow());
     }
 
     private CheckpointEntries readCheckpoint(Path checkpointPath, MetadataEntry metadataEntry, boolean rowStatisticsEnabled)

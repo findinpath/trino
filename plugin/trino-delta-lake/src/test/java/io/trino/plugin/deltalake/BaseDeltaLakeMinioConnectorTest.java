@@ -69,7 +69,7 @@ public abstract class BaseDeltaLakeMinioConnectorTest
                         .put("hive.allow-add-column", "true")
                         .put("hive.allow-rename-column", "true")
                         .put("hive.allow-comment-column", "true")
-                        .build(),
+                        .buildOrThrow(),
                 dockerizedMinioDataLake.getMinioAddress(),
                 dockerizedMinioDataLake.getTestingHadoop());
         queryRunner.execute("CREATE SCHEMA " + SCHEMA + " WITH (location = 's3://" + bucketName + "/" + SCHEMA + "')");

@@ -681,7 +681,7 @@ public class TestTransactionLogAccess
                 .put("fl", (long) Float.floatToIntBits(0.123f))
                 .put("dou", 0.321)
                 .put("dat", LocalDate.parse("5000-01-01").toEpochDay())
-                .build();
+                .buildOrThrow();
 
         for (String columnName : statsValues.keySet()) {
             // Types would need to be specified properly if stats were being read from JSON but are not can be ignored when reading parsed stats from parquet,

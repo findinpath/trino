@@ -37,7 +37,7 @@ public final class MinioContainer
                 .withEnv(ImmutableMap.<String, String>builder()
                         .put("MINIO_ACCESS_KEY", MINIO_ACCESS_KEY)
                         .put("MINIO_SECRET_KEY", MINIO_SECRET_KEY)
-                        .build())
+                        .buildOrThrow())
                 .withNetwork(network)
                 .withNetworkAliases("minio")
                 .withCommand("server", "--address", format("0.0.0.0:%d", MINIO_PORT), "/data")

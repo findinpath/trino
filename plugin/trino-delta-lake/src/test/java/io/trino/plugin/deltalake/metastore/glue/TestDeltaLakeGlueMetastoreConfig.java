@@ -36,7 +36,7 @@ public class TestDeltaLakeGlueMetastoreConfig
     {
         Map<String, String> properties = ImmutableMap.<String, String>builder()
                 .put("delta.hide-non-delta-lake-tables", "true")
-                .build();
+                .buildOrThrow();
 
         DeltaLakeGlueMetastoreConfig expected = new DeltaLakeGlueMetastoreConfig()
                 .setHideNonDeltaLakeTables(true);

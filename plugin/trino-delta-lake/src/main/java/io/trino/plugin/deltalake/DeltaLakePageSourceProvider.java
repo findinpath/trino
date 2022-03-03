@@ -188,6 +188,6 @@ public class DeltaLakePageSourceProvider
                 predicate.put(hiveColumnHandle, domain);
             }
         });
-        return TupleDomain.withColumnDomains(predicate.build());
+        return TupleDomain.withColumnDomains(predicate.buildOrThrow());
     }
 }

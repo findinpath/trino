@@ -142,7 +142,7 @@ public class TestDeltaLakeMetadata
         Map<String, String> config = ImmutableMap.<String, String>builder()
                 .put("hive.metastore", "file")
                 .put("hive.metastore.catalog.dir", temporaryCatalogDirectory.getPath())
-                .build();
+                .buildOrThrow();
 
         Bootstrap app = new Bootstrap(
                 // connector dependencies
@@ -461,7 +461,7 @@ public class TestDeltaLakeMetadata
             tupleBuilder.put(column, Domain.notNull(column.getType()));
         });
 
-        return TupleDomain.withColumnDomains(tupleBuilder.build());
+        return TupleDomain.withColumnDomains(tupleBuilder.buildOrThrow());
     }
 
     private static List<Assignment> createNewColumnAssignments(Map<String, ColumnHandle> assignments)

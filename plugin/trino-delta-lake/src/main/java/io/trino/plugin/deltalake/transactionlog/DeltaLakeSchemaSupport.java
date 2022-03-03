@@ -74,7 +74,7 @@ public final class DeltaLakeSchemaSupport
             .put(BOOLEAN, "boolean")
             .put(VARBINARY, "binary")
             .put(DATE, "date")
-            .build();
+            .buildOrThrow();
 
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapperProvider().get();
 
@@ -111,7 +111,7 @@ public final class DeltaLakeSchemaSupport
         schema.put("fields", columns.stream().map(column -> serializeStructField(column.getName(), column.getType())).collect(toImmutableList()));
         schema.put("type", "struct");
 
-        return schema.build();
+        return schema.buildOrThrow();
     }
 
     private static Map<String, Object> serializeStructField(String name, Type type)
@@ -123,7 +123,7 @@ public final class DeltaLakeSchemaSupport
         fieldContents.put("nullable", true); // TODO: Is column nullability configurable in Presto?
         fieldContents.put("type", serializeColumnType(type));
 
-        return fieldContents.build();
+        return fieldContents.buildOrThrow();
     }
 
     private static Object serializeColumnType(Type columnType)
@@ -148,7 +148,7 @@ public final class DeltaLakeSchemaSupport
         fields.put("containsNull", true);
         fields.put("elementType", serializeColumnType(arrayType.getElementType()));
 
-        return fields.build();
+        return fields.buildOrThrow();
     }
 
     private static Map<String, Object> serializeMapType(MapType mapType)
@@ -160,7 +160,7 @@ public final class DeltaLakeSchemaSupport
         fields.put("valueContainsNull", true);
         fields.put("valueType", serializeColumnType(mapType.getValueType()));
 
-        return fields.build();
+        return fields.buildOrThrow();
     }
 
     private static Map<String, Object> serializeStructType(RowType rowType)
@@ -170,7 +170,7 @@ public final class DeltaLakeSchemaSupport
         fields.put("type", "struct");
         fields.put("fields", rowType.getFields().stream().map(field -> serializeStructField(field.getName().orElse(null), field.getType())).collect(toImmutableList()));
 
-        return fields.build();
+        return fields.buildOrThrow();
     }
 
     private static String serializePrimitiveType(Type type)

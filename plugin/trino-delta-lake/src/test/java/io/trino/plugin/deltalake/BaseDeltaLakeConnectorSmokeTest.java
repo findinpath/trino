@@ -132,7 +132,7 @@ public abstract class BaseDeltaLakeConnectorSmokeTest
                         .put("delta.metadata.cache-ttl", TEST_METADATA_CACHE_TTL_SECONDS + "s")
                         .put("hive.metastore-cache-ttl", TEST_METADATA_CACHE_TTL_SECONDS + "s")
                         .put("hive.allow-rename-table", "true")
-                        .build());
+                        .buildOrThrow());
 
         queryRunner.execute(format("CREATE SCHEMA %s WITH (location = '%s')", SCHEMA, getLocationForTable(bucketName, SCHEMA)));
 

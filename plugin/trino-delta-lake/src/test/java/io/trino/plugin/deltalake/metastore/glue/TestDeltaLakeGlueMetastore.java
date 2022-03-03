@@ -100,7 +100,7 @@ public class TestDeltaLakeGlueMetastore
         Map<String, String> config = ImmutableMap.<String, String>builder()
                 .put("hive.metastore", "glue")
                 .put("delta.hide-non-delta-lake-tables", "true")
-                .build();
+                .buildOrThrow();
 
         Bootstrap app = new Bootstrap(
                 // connector dependencies

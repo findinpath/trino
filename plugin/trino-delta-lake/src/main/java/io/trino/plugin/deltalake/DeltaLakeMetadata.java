@@ -377,7 +377,7 @@ public class DeltaLakeMetadata
         return new ConnectorTableMetadata(
                 tableHandle.getSchemaTableName(),
                 columns,
-                properties.build(),
+                properties.buildOrThrow(),
                 Optional.empty());
     }
 
@@ -640,7 +640,7 @@ public class DeltaLakeMetadata
             // Mimicking the behavior of the Hive connector which sets both `Table#setTableType` and the "EXTERNAL" table property
             properties.put("EXTERNAL", "TRUE");
         }
-        return properties.build();
+        return properties.buildOrThrow();
     }
 
     private static void setDeltaStorageFormat(Table.Builder tableBuilder, String location, Path targetPath)
@@ -1564,8 +1564,8 @@ public class DeltaLakeMetadata
             }
         }
 
-        TupleDomain<DeltaLakeColumnHandle> newEnforcedConstraint = TupleDomain.withColumnDomains(enforceableDomains.build());
-        TupleDomain<DeltaLakeColumnHandle> newUnenforcedConstraint = TupleDomain.withColumnDomains(unenforceableDomains.build());
+        TupleDomain<DeltaLakeColumnHandle> newEnforcedConstraint = TupleDomain.withColumnDomains(enforceableDomains.buildOrThrow());
+        TupleDomain<DeltaLakeColumnHandle> newUnenforcedConstraint = TupleDomain.withColumnDomains(unenforceableDomains.buildOrThrow());
         DeltaLakeTableHandle newHandle = new DeltaLakeTableHandle(
                 tableName.getSchemaName(),
                 tableName.getTableName(),

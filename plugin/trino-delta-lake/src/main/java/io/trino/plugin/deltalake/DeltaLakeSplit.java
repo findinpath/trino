@@ -127,7 +127,7 @@ public class DeltaLakeSplit
                 .put("path", path)
                 .put("start", start)
                 .put("length", length)
-                .build();
+                .buildOrThrow();
     }
 
     @Override

@@ -111,7 +111,7 @@ public final class DeltaLakeQueryRunner
                         .put("hive.allow-drop-table", "true")
                         .put("hive.allow-drop-column", "true")
                         .putAll(connectorProperties)
-                        .build(),
+                        .buildOrThrow(),
                 testingHadoop);
     }
 
@@ -152,7 +152,7 @@ public final class DeltaLakeQueryRunner
                         .put("hive.allow-drop-table", "true")
                         .put("hive.allow-drop-column", "true")
                         .putAll(connectorProperties)
-                        .build(),
+                        .buildOrThrow(),
                 testingHadoop);
     }
 
@@ -181,7 +181,7 @@ public final class DeltaLakeQueryRunner
                 .put("hive.metastore.uri", testingHadoop.getMetastoreAddress())
                 .put("hive.s3.streaming.part-size", "5MB") //must be at least 5MB according to annotations on io.trino.plugin.hive.s3.HiveS3Config.getS3StreamingPartSize
                 .putAll(connectorProperties)
-                .build();
+                .buildOrThrow();
 
         queryRunner.createCatalog(catalogName, CONNECTOR_NAME, deltaLakeProperties);
         return queryRunner;
