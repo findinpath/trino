@@ -13,6 +13,12 @@
  */
 package io.trino.plugin.deltalake.metastore.glue;
 
+import com.amazonaws.services.glue.AWSGlueAsync;
+import com.amazonaws.services.glue.AWSGlueAsyncClientBuilder;
+import com.amazonaws.services.glue.model.DeleteDatabaseRequest;
+import com.amazonaws.services.glue.model.EntityNotFoundException;
+import com.amazonaws.services.glue.model.GetDatabasesRequest;
+import com.amazonaws.services.glue.model.GetDatabasesResult;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableMultimap;
 import com.google.common.io.Files;
@@ -21,6 +27,7 @@ import com.google.inject.Injector;
 import io.airlift.bootstrap.Bootstrap;
 import io.airlift.bootstrap.LifeCycleManager;
 import io.airlift.json.JsonModule;
+import io.airlift.log.Logger;
 import io.trino.plugin.base.CatalogName;
 import io.trino.plugin.deltalake.DeltaLakeMetadata;
 import io.trino.plugin.deltalake.DeltaLakeMetadataFactory;
@@ -31,7 +38,6 @@ import io.trino.plugin.hive.HdfsEnvironment;
 import io.trino.plugin.hive.NodeVersion;
 import io.trino.plugin.hive.metastore.Column;
 import io.trino.plugin.hive.metastore.Database;
-import io.trino.plugin.hive.metastore.HiveMetastore;
 import io.trino.plugin.hive.metastore.PrincipalPrivileges;
 import io.trino.plugin.hive.metastore.Table;
 import io.trino.plugin.hive.metastore.glue.GlueHiveMetastore;
@@ -74,22 +80,30 @@ import static io.trino.plugin.hive.HiveStorageFormat.PARQUET;
 import static io.trino.plugin.hive.HiveTestUtils.HDFS_ENVIRONMENT;
 import static io.trino.plugin.hive.HiveType.HIVE_STRING;
 import static io.trino.plugin.hive.metastore.StorageFormat.fromHiveStorageFormat;
+import static io.trino.plugin.hive.metastore.glue.AwsSdkUtil.getPaginatedResults;
 import static io.trino.spi.security.PrincipalType.ROLE;
 import static io.trino.testing.TestingConnectorSession.SESSION;
 import static java.lang.String.format;
+import static java.lang.System.currentTimeMillis;
 import static java.util.Locale.ENGLISH;
+import static java.util.concurrent.TimeUnit.DAYS;
 import static org.apache.hadoop.hive.metastore.TableType.EXTERNAL_TABLE;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 public class TestDeltaLakeGlueMetastore
 {
+    private static final Logger log = Logger.get(TestDeltaLakeGlueMetastore.class);
+
+    private static final String TEST_DATABASE_NAME_PREFIX = "test_delta_glue";
+
     private File tempDir;
     private LifeCycleManager lifeCycleManager;
-    private HiveMetastore metastoreClient;
+    private GlueHiveMetastore metastoreClient;
     private DeltaLakeMetadataFactory metadataFactory;
     private String databaseName;
     private TestingConnectorSession session;
+    private AWSGlueAsync glueClient;
 
     @BeforeClass
     public void setUp()
@@ -134,13 +148,14 @@ public class TestDeltaLakeGlueMetastore
                 .setPropertyMetadata(injector.getInstance(DeltaLakeSessionProperties.class).getSessionProperties())
                 .build();
 
-        databaseName = "test_delta_glue" + randomName();
+        databaseName = TEST_DATABASE_NAME_PREFIX + randomName();
         metastoreClient.createDatabase(Database.builder()
                 .setDatabaseName(databaseName)
                 .setOwnerName(Optional.of("public"))
                 .setOwnerType(Optional.of(ROLE))
                 .setLocation(Optional.of(temporaryLocation))
                 .build());
+        glueClient = AWSGlueAsyncClientBuilder.defaultClient();
     }
 
     @AfterClass(alwaysRun = true)
@@ -156,9 +171,9 @@ public class TestDeltaLakeGlueMetastore
                     }
                 });
 
+        cleanupOrphanedDatabases();
         databaseName = null;
         lifeCycleManager = null;
-        tempDir = null;
     }
 
     @Test
@@ -285,5 +300,39 @@ public class TestDeltaLakeGlueMetastore
     private static String randomName()
     {
         return UUID.randomUUID().toString().toLowerCase(ENGLISH).replace("-", "");
+    }
+
+    private void cleanupOrphanedDatabases()
+    {
+        long creationTimeMillisThreshold = currentTimeMillis() - DAYS.toMillis(1);
+        List<String> orphanedDatabases = getPaginatedResults(
+                glueClient::getDatabases,
+                new GetDatabasesRequest(),
+                GetDatabasesRequest::setNextToken,
+                GetDatabasesResult::getNextToken,
+                metastoreClient.getStats().getGetDatabases())
+                .map(GetDatabasesResult::getDatabaseList)
+                .flatMap(List::stream)
+                .filter(glueDatabase -> glueDatabase.getName().startsWith(TEST_DATABASE_NAME_PREFIX) &&
+                        glueDatabase.getCreateTime().getTime() <= creationTimeMillisThreshold)
+                .map(com.amazonaws.services.glue.model.Database::getName)
+                .collect(toImmutableList());
+
+        if (!orphanedDatabases.isEmpty()) {
+            log.info("Found %s %s* databases that look orphaned, removing", orphanedDatabases.size(), TEST_DATABASE_NAME_PREFIX);
+            orphanedDatabases.forEach(database -> {
+                try {
+                    log.info("Deleting %s database", database);
+                    glueClient.deleteDatabase(new DeleteDatabaseRequest()
+                            .withName(database));
+                }
+                catch (EntityNotFoundException e) {
+                    log.info("Database [%s] not found, could be removed by other cleanup process", database);
+                }
+                catch (RuntimeException e) {
+                    log.warn(e, "Failed to remove database [%s]", database);
+                }
+            });
+        }
     }
 }
