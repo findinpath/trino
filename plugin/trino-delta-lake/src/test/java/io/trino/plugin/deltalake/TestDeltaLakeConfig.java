@@ -49,6 +49,7 @@ public class TestDeltaLakeConfig
                 .setCheckpointRowStatisticsWritingEnabled(true)
                 .setVacuumMinRetention(new Duration(7, DAYS))
                 .setHiveCatalogName(null)
+                .setTableStatisticsEnabled(true)
                 .setExtendedStatisticsEnabled(true)
                 .setCompressionCodec(HiveCompressionCodec.SNAPPY));
     }
@@ -72,6 +73,7 @@ public class TestDeltaLakeConfig
                 .put("delta.checkpoint-row-statistics-writing.enabled", "false")
                 .put("delta.vacuum.min-retention", "13h")
                 .put("delta.hive-catalog-name", "hive")
+                .put("delta.table-statistics-enabled", "false")
                 .put("delta.extended-statistics.enabled", "false")
                 .put("delta.compression-codec", "GZIP")
                 .build();
@@ -92,6 +94,7 @@ public class TestDeltaLakeConfig
                 .setCheckpointRowStatisticsWritingEnabled(false)
                 .setVacuumMinRetention(new Duration(13, HOURS))
                 .setHiveCatalogName("hive")
+                .setTableStatisticsEnabled(false)
                 .setExtendedStatisticsEnabled(false)
                 .setCompressionCodec(HiveCompressionCodec.GZIP);
 

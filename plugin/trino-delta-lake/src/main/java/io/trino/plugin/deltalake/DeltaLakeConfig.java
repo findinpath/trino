@@ -47,6 +47,7 @@ public class DeltaLakeConfig
     private DataSize maxInitialSplitSize;
     private DataSize maxSplitSize = DataSize.of(64, MEGABYTE);
     private int maxPartitionsPerWriter = 100;
+    private boolean tableStatisticsEnabled = true;
     private boolean unsafeWritesEnabled;
     private boolean checkpointRowStatisticsWritingEnabled = true;
     private long defaultCheckpointWritingInterval = 10;
@@ -252,6 +253,19 @@ public class DeltaLakeConfig
     public DeltaLakeConfig setCheckpointRowStatisticsWritingEnabled(boolean checkpointRowStatisticsWritingEnabled)
     {
         this.checkpointRowStatisticsWritingEnabled = checkpointRowStatisticsWritingEnabled;
+        return this;
+    }
+
+    public boolean isTableStatisticsEnabled()
+    {
+        return tableStatisticsEnabled;
+    }
+
+    @Config("delta.table-statistics-enabled")
+    @ConfigDescription("Expose table statistics")
+    public DeltaLakeConfig setTableStatisticsEnabled(boolean tableStatisticsEnabled)
+    {
+        this.tableStatisticsEnabled = tableStatisticsEnabled;
         return this;
     }
 

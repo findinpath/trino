@@ -52,7 +52,9 @@ public final class DeltaLakeSessionProperties
     // This property is not supported by Delta Lake and exists solely for technical reasons.
     @Deprecated
     private static final String TIMESTAMP_PRECISION = "timestamp_precision";
+    private static final String TABLE_STATISTICS_ENABLED = "statistics_enabled";
     private static final String EXTENDED_STATISTICS_ENABLED = "extended_statistics_enabled";
+
     private final List<PropertyMetadata<?>> sessionProperties;
 
     @Inject
@@ -117,6 +119,11 @@ public final class DeltaLakeSessionProperties
                         value -> { throw new IllegalStateException("The property cannot be set"); },
                         true),
                 booleanProperty(
+                        TABLE_STATISTICS_ENABLED,
+                        "Expose table statistics",
+                        deltaLakeConfig.isTableStatisticsEnabled(),
+                        false),
+                booleanProperty(
                         EXTENDED_STATISTICS_ENABLED,
                         "Use extended statistics collected by ANALYZE",
                         deltaLakeConfig.isExtendedStatisticsEnabled(),
@@ -178,6 +185,11 @@ public final class DeltaLakeSessionProperties
     public static DataSize getParquetWriterPageSize(ConnectorSession session)
     {
         return session.getProperty(PARQUET_WRITER_PAGE_SIZE, DataSize.class);
+    }
+
+    public static boolean isTableStatisticsEnabled(ConnectorSession session)
+    {
+        return session.getProperty(TABLE_STATISTICS_ENABLED, Boolean.class);
     }
 
     public static boolean isExtendedStatisticsEnabled(ConnectorSession session)
