@@ -29,9 +29,13 @@ import io.trino.spi.connector.SystemTable;
 import io.trino.spi.predicate.TupleDomain;
 import io.trino.spi.type.ArrayType;
 import io.trino.spi.type.TypeManager;
+import org.apache.iceberg.ContentFile;
 import org.apache.iceberg.DataFile;
+import org.apache.iceberg.DataTask;
+import org.apache.iceberg.DeleteFile;
 import org.apache.iceberg.FileScanTask;
 import org.apache.iceberg.Schema;
+import org.apache.iceberg.StructLike;
 import org.apache.iceberg.Table;
 import org.apache.iceberg.TableScan;
 import org.apache.iceberg.io.CloseableIterable;
@@ -54,6 +58,8 @@ import static io.trino.spi.type.TypeSignature.mapType;
 import static io.trino.spi.type.VarbinaryType.VARBINARY;
 import static io.trino.spi.type.VarcharType.VARCHAR;
 import static java.util.Objects.requireNonNull;
+import static org.apache.iceberg.MetadataTableType.DATA_FILES;
+import static org.apache.iceberg.MetadataTableUtils.createMetadataTableInstance;
 
 public class FilesTable
         implements SystemTable
@@ -111,13 +117,13 @@ public class FilesTable
     {
         PageListBuilder pagesBuilder = PageListBuilder.forTable(tableMetadata);
         Map<Integer, Type> idToTypeMapping = getIcebergIdToTypeMapping(icebergTable.schema());
-
-        TableScan tableScan = icebergTable.newScan()
+        Table filesMetadataTable = createMetadataTableInstance(icebergTable, DATA_FILES);
+        TableScan tableScan = filesMetadataTable
+                .newScan()
                 .useSnapshot(snapshotId)
                 .includeColumnStats();
-
         try (CloseableIterable<FileScanTask> fileScanTasks = tableScan.planFiles()) {
-            fileScanTasks.forEach(fileScanTask -> addRow(pagesBuilder, idToTypeMapping, fileScanTask.file()));
+            fileScanTasks.forEach(fileScanTask -> addRows(pagesBuilder, idToTypeMapping, (DataTask) fileScanTask));
         }
         catch (IOException e) {
             throw new UncheckedIOException(e);
@@ -126,7 +132,26 @@ public class FilesTable
         return pagesBuilder.build();
     }
 
-    private static void addRow(PageListBuilder pagesBuilder, Map<Integer, Type> idToTypeMapping, DataFile dataFile)
+    private static void addRows(PageListBuilder pagesBuilder, Map<Integer, Type> idToTypeMapping, DataTask dataTask){
+        try (CloseableIterable<StructLike> dataTaskRows = dataTask.rows()) {
+            dataTaskRows.forEach(contentFile -> {
+                if (contentFile instanceof DataFile dataFile) {
+                    addRow(pagesBuilder, idToTypeMapping, dataFile);
+                }
+                else if (contentFile instanceof DeleteFile deleteFile) {
+                    addRow(pagesBuilder, idToTypeMapping, deleteFile);
+                }
+                else {
+                    throw new IllegalArgumentException("Unknown ContentFile type for " + contentFile.getClass().getName());
+                }
+            });
+        }
+        catch (IOException e) {
+            throw new UncheckedIOException(e);
+        }
+    }
+
+    private static <F> void addRow(PageListBuilder pagesBuilder, Map<Integer, Type> idToTypeMapping, ContentFile<F> dataFile)
     {
         pagesBuilder.beginRow();
         pagesBuilder.appendInteger(dataFile.content().id());
