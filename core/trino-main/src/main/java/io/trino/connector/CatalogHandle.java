@@ -29,7 +29,6 @@ import static java.util.Objects.requireNonNull;
 public final class CatalogHandle
 {
     private static final int INSTANCE_SIZE = ClassLayout.parseClass(CatalogHandle.class).instanceSize();
-
     private static final String INFORMATION_SCHEMA_CONNECTOR_PREFIX = "$info_schema@";
     private static final String SYSTEM_TABLES_CONNECTOR_PREFIX = "$system@";
 
