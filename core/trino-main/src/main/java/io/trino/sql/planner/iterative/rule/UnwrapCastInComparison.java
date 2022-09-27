@@ -15,6 +15,7 @@ package io.trino.sql.planner.iterative.rule;
 
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Throwables;
+import com.google.common.math.LongMath;
 import io.airlift.slice.Slice;
 import io.trino.Session;
 import io.trino.metadata.OperatorNotFoundException;
@@ -24,6 +25,7 @@ import io.trino.spi.function.InvocationConvention;
 import io.trino.spi.type.CharType;
 import io.trino.spi.type.DecimalType;
 import io.trino.spi.type.DoubleType;
+import io.trino.spi.type.LongTimestamp;
 import io.trino.spi.type.LongTimestampWithTimeZone;
 import io.trino.spi.type.RealType;
 import io.trino.spi.type.TimeWithTimeZoneType;
@@ -39,6 +41,7 @@ import io.trino.sql.planner.LiteralEncoder;
 import io.trino.sql.planner.NoOpSymbolResolver;
 import io.trino.sql.planner.TypeAnalyzer;
 import io.trino.sql.planner.TypeProvider;
+import io.trino.sql.tree.BetweenPredicate;
 import io.trino.sql.tree.Cast;
 import io.trino.sql.tree.ComparisonExpression;
 import io.trino.sql.tree.Expression;
@@ -50,7 +53,10 @@ import io.trino.type.TypeCoercion;
 
 import java.lang.invoke.MethodHandle;
 import java.time.Instant;
+import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.time.ZoneId;
+import java.time.ZoneOffset;
 import java.time.temporal.ChronoUnit;
 import java.time.zone.ZoneOffsetTransition;
 import java.util.Optional;
@@ -69,6 +75,9 @@ import static io.trino.spi.type.DateType.DATE;
 import static io.trino.spi.type.DoubleType.DOUBLE;
 import static io.trino.spi.type.IntegerType.INTEGER;
 import static io.trino.spi.type.RealType.REAL;
+import static io.trino.spi.type.TimestampType.createTimestampType;
+import static io.trino.spi.type.Timestamps.MICROSECONDS_PER_SECOND;
+import static io.trino.spi.type.Timestamps.NANOSECONDS_PER_MICROSECOND;
 import static io.trino.spi.type.Timestamps.PICOSECONDS_PER_NANOSECOND;
 import static io.trino.spi.type.TypeUtils.isFloatingPointNaN;
 import static io.trino.sql.ExpressionUtils.and;
@@ -81,8 +90,11 @@ import static io.trino.sql.tree.ComparisonExpression.Operator.GREATER_THAN_OR_EQ
 import static io.trino.sql.tree.ComparisonExpression.Operator.LESS_THAN;
 import static io.trino.sql.tree.ComparisonExpression.Operator.LESS_THAN_OR_EQUAL;
 import static io.trino.sql.tree.ComparisonExpression.Operator.NOT_EQUAL;
+import static io.trino.type.DateTimes.PICOSECONDS_PER_MICROSECOND;
+import static io.trino.type.DateTimes.scaleFactor;
 import static java.lang.Float.intBitsToFloat;
 import static java.lang.Math.toIntExact;
+import static java.math.RoundingMode.UNNECESSARY;
 import static java.util.Objects.requireNonNull;
 
 /**
@@ -169,6 +181,58 @@ public class UnwrapCastInComparison
         {
             ComparisonExpression expression = (ComparisonExpression) treeRewriter.defaultRewrite((Expression) node, null);
             return unwrapCast(expression);
+        }
+
+        @Override
+        public Expression rewriteBetweenPredicate(BetweenPredicate node, Void context, ExpressionTreeRewriter<Void> treeRewriter)
+        {
+            BetweenPredicate expression = (BetweenPredicate) treeRewriter.defaultRewrite((Expression) node, null);
+            return unwrapCast(expression);
+        }
+
+        private Expression unwrapCast(BetweenPredicate expression)
+        {
+            // Canonicalization is handled by CanonicalizeExpressionRewriter
+            if (!(expression.getValue() instanceof Cast cast)) {
+                return expression;
+            }
+
+            Object min = new ExpressionInterpreter(expression.getMin(), plannerContext, session, typeAnalyzer.getTypes(session, types, expression.getMin()))
+                    .optimize(NoOpSymbolResolver.INSTANCE);
+            Object max = new ExpressionInterpreter(expression.getMax(), plannerContext, session, typeAnalyzer.getTypes(session, types, expression.getMax()))
+                    .optimize(NoOpSymbolResolver.INSTANCE);
+
+            if (min == null || min instanceof NullLiteral || max == null || max instanceof NullLiteral) {
+                return new Cast(new NullLiteral(), toSqlType(BOOLEAN));
+            }
+
+            if (min instanceof Expression || max instanceof Expression) {
+                return expression;
+            }
+
+            Type sourceType = typeAnalyzer.getType(session, types, cast.getExpression());
+            Type minType = typeAnalyzer.getType(session, types, expression.getMin());
+            Type maxType = typeAnalyzer.getType(session, types, expression.getMax());
+            verify(minType.equals(maxType), "Mismatched types: %s and %s", minType, maxType);
+
+            if (sourceType instanceof TimestampType && minType == DATE) {
+                return unwrapTimestampToDateCastForRange(session, (TimestampType) sourceType, cast.getExpression(), (long) min, (long) max);
+            }
+
+            //TODO unwrapTimestampWithTimeZoneToDateCastForRange
+            if (minType instanceof TimestampWithTimeZoneType) {
+                // Note: two TIMESTAMP WITH TIME ZONE values differing in zone only (same instant) are considered equal.
+                min = withTimeZone(((TimestampWithTimeZoneType) minType), min, session.getTimeZoneKey());
+                max = withTimeZone(((TimestampWithTimeZoneType) maxType), max, session.getTimeZoneKey());
+
+                if (!hasInjectiveImplicitCoercion(sourceType, minType, min) || !hasInjectiveImplicitCoercion(sourceType, maxType, max)) {
+                    return expression;
+                }
+
+            }
+
+
+            return expression;
         }
 
         private Expression unwrapCast(ComparisonExpression expression)
@@ -385,6 +449,42 @@ public class UnwrapCastInComparison
                                 new ComparisonExpression(LESS_THAN, timestampExpression, dateTimestamp),
                                 new ComparisonExpression(GREATER_THAN_OR_EQUAL, timestampExpression, nextDateTimestamp)));
             };
+        }
+
+        private Expression unwrapTimestampToDateCastForRange(Session session, TimestampType sourceType, Expression timestampExpression, long minDateInclusive, long maxDateInclusive)
+        {
+            ResolvedFunction targetToSource;
+            try {
+                targetToSource = plannerContext.getMetadata().getCoercion(session, DATE, sourceType);
+            }
+            catch (OperatorNotFoundException e) {
+                throw new TrinoException(GENERIC_INTERNAL_ERROR, e);
+            }
+
+            Expression minDateInclusiveTimestamp = literalEncoder.toExpression(session, coerce(minDateInclusive, targetToSource), sourceType);
+            Expression maxDateInclusiveTimestamp;
+            if (sourceType.isShort()) {
+                long maxDateExclusive = (long) coerce(maxDateInclusive + 1, targetToSource);
+                long maxTimestampInclusiveMicros = maxDateExclusive - scaleFactor(sourceType.getPrecision(), 6);
+                maxDateInclusiveTimestamp = literalEncoder.toExpression(session, maxTimestampInclusiveMicros, sourceType);
+            }
+            else {
+                ResolvedFunction targetToSourceShortTimestamp;
+                try {
+                    targetToSourceShortTimestamp = plannerContext.getMetadata().getCoercion(session, DATE, createTimestampType(6));
+                }
+                catch (OperatorNotFoundException e) {
+                    throw new TrinoException(GENERIC_INTERNAL_ERROR, e);
+                }
+                long maxDateExclusive = (long) coerce(maxDateInclusive + 1, targetToSourceShortTimestamp);
+                long maxTimestampInclusiveMicros = maxDateExclusive - scaleFactor(sourceType.getPrecision(), 6);
+                maxDateInclusiveTimestamp = literalEncoder.toExpression(
+                        session,
+                        new LongTimestamp(maxTimestampInclusiveMicros, toIntExact(PICOSECONDS_PER_MICROSECOND - scaleFactor(sourceType.getPrecision(), 12))),
+                        sourceType);
+            }
+
+            return new BetweenPredicate(timestampExpression, minDateInclusiveTimestamp, maxDateInclusiveTimestamp);
         }
 
         private boolean hasInjectiveImplicitCoercion(Type source, Type target, Object value)
