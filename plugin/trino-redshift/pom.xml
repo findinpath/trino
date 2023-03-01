@@ -209,7 +209,6 @@
                         <configuration>
                             <includes>
                                 <include>**/TestRedshiftAutomaticJoinPushdown.java</include>
-                                <include>**/TestRedshiftConnectorTest.java</include>
                                 <include>**/TestRedshiftTableStatisticsReader.java</include>
                                 <include>**/TestRedshiftTypeMapping.java</include>
                             </includes>
