@@ -19,6 +19,7 @@ import io.trino.plugin.hive.TestingHivePlugin;
 import io.trino.testing.AbstractTestQueryFramework;
 import io.trino.testing.DistributedQueryRunner;
 import io.trino.testing.QueryRunner;
+import org.intellij.lang.annotations.Language;
 import org.testng.annotations.DataProvider;
 import org.testng.annotations.Test;
 
@@ -72,6 +73,43 @@ public class TestIcebergMigrateProcedure
 
         assertUpdate("INSERT INTO " + icebergTableName + " VALUES (2)", 1);
         assertQuery("SELECT * FROM " + icebergTableName, "VALUES (1), (2)");
+
+        assertUpdate("DROP TABLE " + tableName);
+    }
+
+    @Test(dataProvider = "fileFormats")
+    public void testMigrateTableWithComplexType(IcebergFileFormat fileFormat)
+    {
+        String tableName = "test_migrate_complex_" + randomNameSuffix();
+        String hiveTableName = "hive.tpch." + tableName;
+        String icebergTableName = "iceberg.tpch." + tableName;
+
+        assertUpdate("CREATE TABLE " + hiveTableName + " WITH (format='" + fileFormat + "') AS SELECT 1 x, array[2, 3] a, CAST(map(array['key1'], array['value1']) AS map(varchar, varchar)) b, CAST(row(1) AS row(d integer)) c", 1);
+        assertQueryFails("SELECT * FROM " + icebergTableName, "Not an Iceberg table: .*");
+
+        assertUpdate("CALL iceberg.system.migrate('tpch', '" + tableName + "')");
+
+        assertThat((String) computeScalar("SHOW CREATE TABLE " + icebergTableName))
+                .contains("format = '%s'".formatted(fileFormat));
+
+        @Language("SQL") String firstRow = "VALUES (" +
+                "1, " +
+                "ARRAY[2, 3], " +
+                "CAST(map(ARRAY['key1'], ARRAY['value1']) AS map(varchar, varchar)), " +
+                "CAST(row(1) AS row(d integer)))";
+        assertThat(query("SELECT * FROM " + icebergTableName))
+                .matches(firstRow);
+        assertQuery("SELECT count(*) FROM " + icebergTableName, "VALUES 1");
+
+        @Language("SQL") String secondRow = " VALUES (" +
+                "2, " +
+                "ARRAY[4, 5], " +
+                "CAST(map(ARRAY['key2'], ARRAY['value2']) AS map(varchar, varchar)), " +
+                "CAST(row(2) AS row(d integer)))";
+        assertUpdate("INSERT INTO " + icebergTableName + secondRow, 1);
+        assertQuery("SELECT count(*) FROM " + icebergTableName, "VALUES 2");
+        assertThat(query("SELECT * FROM " + icebergTableName))
+                .matches(firstRow + " UNION ALL " + secondRow);
 
         assertUpdate("DROP TABLE " + tableName);
     }
@@ -259,26 +297,6 @@ public class TestIcebergMigrateProcedure
         assertQuery("SELECT * FROM " + hiveTableName, "VALUES timestamp '2021-01-01 00:00:00.000'");
         assertQueryFails("SELECT * FROM " + icebergTableName, "Not an Iceberg table: .*");
 
-        assertUpdate("DROP TABLE " + hiveTableName);
-    }
-
-    @Test
-    public void testMigrateUnsupportedComplexColumnType()
-    {
-        // TODO https://github.com/trinodb/trino/issues/17583 Add support for these complex types
-        String tableName = "test_migrate_unsupported_complex_column_type_" + randomNameSuffix();
-        String hiveTableName = "hive.tpch." + tableName;
-
-        assertUpdate("CREATE TABLE " + hiveTableName + " AS SELECT array[1] x", 1);
-        assertQueryFails("CALL iceberg.system.migrate('tpch', '" + tableName + "')", "\\QMigrating array(integer) type is not supported");
-        assertUpdate("DROP TABLE " + hiveTableName);
-
-        assertUpdate("CREATE TABLE " + hiveTableName + " AS SELECT map(array['key'], array[2]) x", 1);
-        assertQueryFails("CALL iceberg.system.migrate('tpch', '" + tableName + "')", "\\QMigrating map(varchar(3), integer) type is not supported");
-        assertUpdate("DROP TABLE " + hiveTableName);
-
-        assertUpdate("CREATE TABLE " + hiveTableName + " AS SELECT CAST(row(1) AS row(y integer)) x", 1);
-        assertQueryFails("CALL iceberg.system.migrate('tpch', '" + tableName + "')", "\\QMigrating row(y integer) type is not supported");
         assertUpdate("DROP TABLE " + hiveTableName);
     }
 
