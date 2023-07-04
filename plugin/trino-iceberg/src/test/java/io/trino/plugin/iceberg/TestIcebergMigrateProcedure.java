@@ -257,6 +257,77 @@ public class TestIcebergMigrateProcedure
     }
 
     @Test
+    public void testMigrateTableParquetSchemaEvolution()
+            throws Exception
+    {
+        String randomNameSuffix = randomNameSuffix();
+        String tableNameOneColumn = "test_migrate_one_column_" + randomNameSuffix;
+        String tableNameTwoColumns = "test_migrate_two_columns_" + randomNameSuffix;
+        String hiveTableNameOneColumn = "hive.tpch." + tableNameOneColumn;
+        String hiveTableNameTwoColumns = "hive.tpch." + tableNameTwoColumns;
+        String icebergTableNameTwoColumns = "iceberg.tpch." + tableNameTwoColumns;
+
+        assertUpdate("CREATE TABLE " + hiveTableNameOneColumn + " WITH (format = 'PARQUET') AS SELECT 1 col1", 1);
+        assertUpdate("CREATE TABLE " + hiveTableNameTwoColumns + " WITH (format = 'PARQUET') AS SELECT 2 col1, CAST(row(10, 20) AS row(x integer, y integer)) AS nested", 1);
+
+        // Copy the parquet file containing only one column to the table with two columns
+        Path tableNameOneColumnLocation = Path.of("%s/tpch/%s".formatted(dataDirectory, tableNameOneColumn));
+        Path tableNameTwoColumnsLocation = Path.of("%s/tpch/%s".formatted(dataDirectory, tableNameTwoColumns));
+        try (Stream<Path> files = Files.list(tableNameOneColumnLocation)) {
+            Path file = files.filter(path -> !path.getFileName().toString().startsWith(".")).collect(onlyElement());
+            Files.copy(file, tableNameTwoColumnsLocation.resolve(file.getFileName()));
+        }
+
+        assertUpdate("CALL iceberg.system.migrate('tpch', '" + tableNameTwoColumns + "')");
+
+        assertThat(query("SELECT * FROM " + icebergTableNameTwoColumns))
+                .skippingTypesCheck()
+                .matches("VALUES (1, CAST(null AS row(x integer, y integer))), (2, row(10, 20))");
+
+        assertUpdate("INSERT INTO " + icebergTableNameTwoColumns + " VALUES (3, row(100, 200))", 1);
+        assertThat(query("SELECT * FROM " + icebergTableNameTwoColumns))
+                .skippingTypesCheck()
+                .matches("VALUES (1, CAST(null AS row(x integer, y integer))), (2, row(10, 20)), (3, row(100, 200))");
+
+        assertUpdate("DROP TABLE " + icebergTableNameTwoColumns);
+    }
+
+    @Test
+    public void testMigrateTableParquetRowColumnSchemaEvolution()
+            throws Exception
+    {
+        String randomNameSuffix = randomNameSuffix();
+        String tableNameRowOneColumn = "test_migrate_row_one_column_" + randomNameSuffix;
+        String tableNameRowTwoColumns = "test_migrate_row_two_columns_" + randomNameSuffix;
+        String hiveTableNameRowOneColumn = "hive.tpch." + tableNameRowOneColumn;
+        String hiveTableNameRowTwoColumns = "hive.tpch." + tableNameRowTwoColumns;
+        String icebergTableNameRowTwoColumns = "iceberg.tpch." + tableNameRowTwoColumns;
+
+        assertUpdate("CREATE TABLE " + hiveTableNameRowOneColumn + " WITH (format = 'PARQUET') AS SELECT CAST(row(1) AS row(x integer)) as nested", 1);
+        assertUpdate("CREATE TABLE " + hiveTableNameRowTwoColumns + " WITH (format = 'PARQUET') AS SELECT CAST(row(10, 20) AS row(x integer, y integer)) AS nested", 1);
+
+        Path tableNameRowOneColumnLocation = Path.of("%s/tpch/%s".formatted(dataDirectory, tableNameRowOneColumn));
+        Path tableNameRowTwoColumnsLocation = Path.of("%s/tpch/%s".formatted(dataDirectory, tableNameRowTwoColumns));
+        try (Stream<Path> files = Files.list(tableNameRowOneColumnLocation)) {
+            Path file = files.filter(path -> !path.getFileName().toString().startsWith(".")).collect(onlyElement());
+            Files.copy(file, tableNameRowTwoColumnsLocation.resolve(file.getFileName()));
+        }
+
+        assertUpdate("CALL iceberg.system.migrate('tpch', '" + tableNameRowTwoColumns + "')");
+
+        assertThat(query("SELECT * FROM " + icebergTableNameRowTwoColumns))
+                .skippingTypesCheck()
+                .matches("VALUES row(CAST((1,null) AS row(x integer, y integer))), row(row(10, 20))");
+
+        assertUpdate("INSERT INTO " + icebergTableNameRowTwoColumns + " VALUES (row(row(100, 200)))", 1);
+        assertThat(query("SELECT * FROM " + icebergTableNameRowTwoColumns))
+                .skippingTypesCheck()
+                .matches("VALUES row(CAST((1, null) AS row(x integer, y integer))), row(row(10, 20)), row(row(100, 200))");
+
+        assertUpdate("DROP TABLE " + icebergTableNameRowTwoColumns);
+    }
+
+    @Test
     public void testMigrateTablePreserveComments()
     {
         String tableName = "test_migrate_comments_" + randomNameSuffix();
