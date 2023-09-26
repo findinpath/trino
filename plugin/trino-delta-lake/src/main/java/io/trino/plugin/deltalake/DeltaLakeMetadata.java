@@ -1282,7 +1282,8 @@ public class DeltaLakeMetadata
                         maxFileModificationTime,
                         computedStatistics,
                         columnNames,
-                        Optional.of(physicalColumnMapping));
+                        Optional.of(physicalColumnMapping),
+                        true);
             }
 
             PrincipalPrivileges principalPrivileges = buildInitialPrivilegeSet(table.getOwner().orElseThrow());
@@ -1846,7 +1847,8 @@ public class DeltaLakeMetadata
                         computedStatistics,
                         exactColumnNames,
                         Optional.of(extractSchema(handle.getMetadataEntry(), handle.getProtocolEntry(), typeManager).stream()
-                                .collect(toImmutableMap(DeltaLakeColumnMetadata::getName, DeltaLakeColumnMetadata::getPhysicalName))));
+                                .collect(toImmutableMap(DeltaLakeColumnMetadata::getName, DeltaLakeColumnMetadata::getPhysicalName))),
+                        true);
             }
         }
         catch (Exception e) {
@@ -3136,7 +3138,8 @@ public class DeltaLakeMetadata
                 maxFileModificationTime,
                 computedStatistics,
                 getExactColumnNames(tableHandle.getMetadataEntry()),
-                Optional.of(physicalColumnNameMapping));
+                Optional.of(physicalColumnNameMapping),
+                false);
     }
 
     private void generateMissingFileStatistics(ConnectorSession session, DeltaLakeTableHandle tableHandle, Collection<ComputedStatistics> computedStatistics)
@@ -3222,7 +3225,8 @@ public class DeltaLakeMetadata
             Optional<Instant> maxFileModificationTime,
             Collection<ComputedStatistics> computedStatistics,
             List<String> originalColumnNames,
-            Optional<Map<String, String>> physicalColumnNameMapping)
+            Optional<Map<String, String>> physicalColumnNameMapping,
+            boolean ignoreFailure)
     {
         Optional<ExtendedStatistics> oldStatistics = Optional.empty();
         boolean loadExistingStats = analyzeHandle.isEmpty() || analyzeHandle.get().getAnalyzeMode() == INCREMENTAL;
@@ -3293,7 +3297,18 @@ public class DeltaLakeMetadata
                 mergedColumnStatistics,
                 analyzedColumns);
 
-        statisticsAccess.updateExtendedStatistics(session, schemaTableName, location, mergedExtendedStatistics);
+        try {
+            statisticsAccess.updateExtendedStatistics(session, schemaTableName, location, mergedExtendedStatistics);
+        }
+        catch (Exception e) {
+            if (ignoreFailure) {
+                // We can't fail here as transaction was already committed
+                LOG.error(e, "Failed to write extended statistics for the table %s", schemaTableName);
+            }
+            else {
+                throw e;
+            }
+        }
     }
 
     private static String toPhysicalColumnName(String columnName, Map</* lowercase*/ String, String> lowerCaseToExactColumnNames, Optional<Map<String, String>> physicalColumnNameMapping)
