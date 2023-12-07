@@ -188,7 +188,7 @@ public class TestDeltaLakeSplitManager
                 new ParquetReaderConfig())
         {
             @Override
-            public List<AddFileEntry> getActiveFiles(
+            public CloseableIterator<AddFileEntry> getActiveFiles(
                     TableSnapshot tableSnapshot,
                     MetadataEntry metadataEntry,
                     ProtocolEntry protocolEntry,
@@ -196,7 +196,7 @@ public class TestDeltaLakeSplitManager
                     Optional<Set<DeltaLakeColumnHandle>> projectedColumns,
                     ConnectorSession session)
             {
-                return addFileEntries;
+                return CloseableIterator.withClose(addFileEntries.iterator());
             }
         };
 

@@ -14,6 +14,7 @@
 package io.trino.plugin.deltalake.transactionlog;
 
 import com.google.common.collect.HashMultiset;
+import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMultiset;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Multiset;
@@ -22,6 +23,7 @@ import io.trino.filesystem.TrackingFileSystemFactory.OperationType;
 import io.trino.filesystem.TrinoFileSystem;
 import io.trino.filesystem.hdfs.HdfsFileSystemFactory;
 import io.trino.parquet.ParquetReaderOptions;
+import io.trino.plugin.deltalake.CloseableIterator;
 import io.trino.plugin.deltalake.DeltaLakeConfig;
 import io.trino.plugin.deltalake.transactionlog.checkpoint.CheckpointSchemaManager;
 import io.trino.plugin.deltalake.transactionlog.checkpoint.LastCheckpoint;
@@ -41,10 +43,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicReference;
-import java.util.stream.Stream;
 
 import static com.google.common.base.Predicates.alwaysTrue;
-import static com.google.common.collect.ImmutableList.toImmutableList;
 import static io.trino.filesystem.TrackingFileSystemFactory.OperationType.INPUT_FILE_NEW_STREAM;
 import static io.trino.plugin.deltalake.transactionlog.TableSnapshot.MetadataAndProtocolEntry;
 import static io.trino.plugin.deltalake.transactionlog.TableSnapshot.load;
@@ -142,7 +142,7 @@ public class TestTableSnapshot
         MetadataEntry metadataEntry = transactionLogAccess.getMetadataEntry(tableSnapshot, SESSION);
         ProtocolEntry protocolEntry = transactionLogAccess.getProtocolEntry(SESSION, tableSnapshot);
         tableSnapshot.setCachedMetadata(Optional.of(metadataEntry));
-        try (Stream<DeltaLakeTransactionLogEntry> stream = tableSnapshot.getCheckpointTransactionLogEntries(
+        try (CloseableIterator<DeltaLakeTransactionLogEntry> checkpointEntryIterator = tableSnapshot.getCheckpointTransactionLogEntries(
                 SESSION,
                 ImmutableSet.of(ADD),
                 checkpointSchemaManager,
@@ -152,7 +152,7 @@ public class TestTableSnapshot
                 Optional.of(new MetadataAndProtocolEntry(metadataEntry, protocolEntry)),
                 TupleDomain.all(),
                 Optional.of(alwaysTrue()))) {
-            List<DeltaLakeTransactionLogEntry> entries = stream.collect(toImmutableList());
+            List<DeltaLakeTransactionLogEntry> entries = ImmutableList.copyOf(checkpointEntryIterator);
 
             assertThat(entries).hasSize(9);
 
@@ -192,7 +192,7 @@ public class TestTableSnapshot
         }
 
         // lets read two entry types in one call; add and protocol
-        try (Stream<DeltaLakeTransactionLogEntry> stream = tableSnapshot.getCheckpointTransactionLogEntries(
+        try (CloseableIterator<DeltaLakeTransactionLogEntry> checkpointEntryIterator = tableSnapshot.getCheckpointTransactionLogEntries(
                 SESSION,
                 ImmutableSet.of(ADD, PROTOCOL),
                 checkpointSchemaManager,
@@ -202,7 +202,7 @@ public class TestTableSnapshot
                 Optional.of(new MetadataAndProtocolEntry(metadataEntry, protocolEntry)),
                 TupleDomain.all(),
                 Optional.of(alwaysTrue()))) {
-            List<DeltaLakeTransactionLogEntry> entries = stream.collect(toImmutableList());
+            List<DeltaLakeTransactionLogEntry> entries = ImmutableList.copyOf(checkpointEntryIterator);
 
             assertThat(entries).hasSize(10);
 

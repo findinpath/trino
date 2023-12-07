@@ -26,6 +26,7 @@ import io.trino.filesystem.TrinoFileSystem;
 import io.trino.filesystem.TrinoFileSystemFactory;
 import io.trino.plugin.base.CatalogName;
 import io.trino.plugin.base.util.UncheckedCloseable;
+import io.trino.plugin.deltalake.CloseableIterator;
 import io.trino.plugin.deltalake.DeltaLakeConfig;
 import io.trino.plugin.deltalake.DeltaLakeMetadata;
 import io.trino.plugin.deltalake.DeltaLakeMetadataFactory;
@@ -198,8 +199,13 @@ public class VacuumProcedure
             // Retain all active files and every file removed by a "recent" transaction (except for the oldest "recent").
             // Any remaining file are not live, and not needed to read any "recent" snapshot.
             List<Long> recentVersions = transactionLogAccess.getPastTableVersions(fileSystem, transactionLogDir, threshold, tableSnapshot.getVersion());
+            List<AddFileEntry> addFileEntries;
+            try (CloseableIterator<AddFileEntry> addFileEntryIterator = transactionLogAccess.getActiveFiles(
+                    tableSnapshot, handle.getMetadataEntry(), handle.getProtocolEntry(), session)) {
+                addFileEntries = ImmutableList.copyOf(addFileEntryIterator);
+            }
             Set<String> retainedPaths = Stream.concat(
-                            transactionLogAccess.getActiveFiles(tableSnapshot, handle.getMetadataEntry(), handle.getProtocolEntry(), session).stream()
+                            addFileEntries.stream()
                                     .map(AddFileEntry::getPath),
                             transactionLogAccess.getJsonEntries(
                                             fileSystem,

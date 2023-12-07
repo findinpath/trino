@@ -13,6 +13,7 @@
  */
 package io.trino.plugin.deltalake;
 
+import com.google.common.collect.ImmutableList;
 import io.trino.plugin.deltalake.transactionlog.AddFileEntry;
 import io.trino.plugin.deltalake.transactionlog.MetadataEntry;
 import io.trino.plugin.deltalake.transactionlog.ProtocolEntry;
@@ -57,7 +58,9 @@ public final class TestingDeltaLakeUtils
         TableSnapshot snapshot = transactionLogAccess.loadSnapshot(SESSION, dummyTable, tableLocation);
         MetadataEntry metadataEntry = transactionLogAccess.getMetadataEntry(snapshot, SESSION);
         ProtocolEntry protocolEntry = transactionLogAccess.getProtocolEntry(SESSION, snapshot);
-        return transactionLogAccess.getActiveFiles(snapshot, metadataEntry, protocolEntry, SESSION);
+        try (CloseableIterator<AddFileEntry> addFileEntries = transactionLogAccess.getActiveFiles(snapshot, metadataEntry, protocolEntry, SESSION)) {
+            return ImmutableList.copyOf(addFileEntries);
+        }
     }
 
     public static void copyDirectoryContents(Path source, Path destination)

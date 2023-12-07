@@ -22,6 +22,7 @@ import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.ImmutableTable;
 import com.google.common.collect.Sets;
+import com.google.common.collect.Streams;
 import io.airlift.json.JsonCodec;
 import io.airlift.log.Logger;
 import io.airlift.slice.Slice;
@@ -537,9 +538,11 @@ public class DeltaLakeMetadata
                     session,
                     tableSnapshot,
                     ImmutableSet.of(METADATA, PROTOCOL),
-                    entryStream -> entryStream
-                            .filter(entry -> entry.getMetaData() != null || entry.getProtocol() != null)
-                            .map(entry -> firstNonNull(entry.getMetaData(), entry.getProtocol())));
+                    entryIterator -> CloseableIterator.map(
+                            CloseableIterator.filter(
+                                    entryIterator,
+                                    entry -> entry.getMetaData() != null || entry.getProtocol() != null),
+                            entry -> firstNonNull(entry.getMetaData(), entry.getProtocol())));
         }
         catch (TrinoException e) {
             if (e.getErrorCode().equals(DELTA_LAKE_INVALID_SCHEMA.toErrorCode())) {
@@ -1414,8 +1417,17 @@ public class DeltaLakeMetadata
         }
         checkUnsupportedWriterFeatures(protocolEntry);
 
-        if (!newColumnMetadata.isNullable() && !transactionLogAccess.getActiveFiles(getSnapshot(session, handle), handle.getMetadataEntry(), handle.getProtocolEntry(), session).isEmpty()) {
-            throw new TrinoException(DELTA_LAKE_BAD_WRITE, format("Unable to add NOT NULL column '%s' for non-empty table: %s.%s", newColumnMetadata.getName(), handle.getSchemaName(), handle.getTableName()));
+        if (!newColumnMetadata.isNullable()) {
+            boolean tableHasDataFiles;
+            try (CloseableIterator<AddFileEntry> addFileEntries = transactionLogAccess.getActiveFiles(getSnapshot(session, handle), handle.getMetadataEntry(), handle.getProtocolEntry(), session)) {
+                tableHasDataFiles = addFileEntries.hasNext();
+            }
+            catch (IOException e) {
+                throw new TrinoException(DELTA_LAKE_FILESYSTEM_ERROR, "Error reading transaction log for " + handle.getSchemaTableName(), e);
+            }
+            if (tableHasDataFiles) {
+                throw new TrinoException(DELTA_LAKE_BAD_WRITE, format("Unable to add NOT NULL column '%s' for non-empty table: %s.%s", newColumnMetadata.getName(), handle.getSchemaName(), handle.getTableName()));
+            }
         }
 
         try {
@@ -3140,18 +3152,22 @@ public class DeltaLakeMetadata
 
     private void generateMissingFileStatistics(ConnectorSession session, DeltaLakeTableHandle tableHandle, Collection<ComputedStatistics> computedStatistics)
     {
-        Map<String, AddFileEntry> addFileEntriesWithNoStats = transactionLogAccess.getActiveFiles(
-                        getSnapshot(session, tableHandle), tableHandle.getMetadataEntry(), tableHandle.getProtocolEntry(), session)
-                .stream()
-                .filter(addFileEntry -> addFileEntry.getStats().isEmpty()
-                        || addFileEntry.getStats().get().getNumRecords().isEmpty()
-                        || addFileEntry.getStats().get().getMaxValues().isEmpty()
-                        || addFileEntry.getStats().get().getMinValues().isEmpty()
-                        || addFileEntry.getStats().get().getNullCount().isEmpty())
-                .filter(addFileEntry -> !URI.create(addFileEntry.getPath()).isAbsolute()) // TODO: Support absolute paths https://github.com/trinodb/trino/issues/18277
-                // Statistics returns whole path to file build in DeltaLakeSplitManager, so we need to create corresponding map key for AddFileEntry.
-                .collect(toImmutableMap(addFileEntry -> DeltaLakeSplitManager.buildSplitPath(Location.of(tableHandle.getLocation()), addFileEntry).toString(), identity()));
-
+        Map<String, AddFileEntry> addFileEntriesWithNoStats;
+        try (CloseableIterator<AddFileEntry> addFileEntryIterator = transactionLogAccess.getActiveFiles(
+                getSnapshot(session, tableHandle), tableHandle.getMetadataEntry(), tableHandle.getProtocolEntry(), session)) {
+            addFileEntriesWithNoStats = Streams.stream(addFileEntryIterator)
+                    .filter(addFileEntry -> addFileEntry.getStats().isEmpty()
+                            || addFileEntry.getStats().get().getNumRecords().isEmpty()
+                            || addFileEntry.getStats().get().getMaxValues().isEmpty()
+                            || addFileEntry.getStats().get().getMinValues().isEmpty()
+                            || addFileEntry.getStats().get().getNullCount().isEmpty())
+                    .filter(addFileEntry -> !URI.create(addFileEntry.getPath()).isAbsolute()) // TODO: Support absolute paths https://github.com/trinodb/trino/issues/18277
+                    // Statistics returns whole path to file build in DeltaLakeSplitManager, so we need to create corresponding map key for AddFileEntry.
+                    .collect(toImmutableMap(addFileEntry -> DeltaLakeSplitManager.buildSplitPath(Location.of(tableHandle.getLocation()), addFileEntry).toString(), identity()));
+        }
+        catch (IOException e) {
+            throw new TrinoException(DELTA_LAKE_FILESYSTEM_ERROR, "Error reading transaction log for " + tableHandle.getSchemaTableName(), e);
+        }
         if (addFileEntriesWithNoStats.isEmpty()) {
             return;
         }
@@ -3449,9 +3465,8 @@ public class DeltaLakeMetadata
         checkWriteSupported(tableHandle);
 
         String tableLocation = tableHandle.location();
-        List<AddFileEntry> activeFiles = getAddFileEntriesMatchingEnforcedPartitionConstraint(session, tableHandle);
 
-        try {
+        try (CloseableIterator<AddFileEntry> activeFiles = getAddFileEntriesMatchingEnforcedPartitionConstraint(session, tableHandle)) {
             TransactionLogWriter transactionLogWriter = transactionLogWriterFactory.newWriter(session, tableLocation);
 
             long writeTimestamp = Instant.now().toEpochMilli();
@@ -3465,7 +3480,8 @@ public class DeltaLakeMetadata
 
             long deletedRecords = 0L;
             boolean allDeletedFilesStatsPresent = true;
-            for (AddFileEntry addFileEntry : activeFiles) {
+            while (activeFiles.hasNext()) {
+                AddFileEntry addFileEntry = activeFiles.next();
                 transactionLogWriter.appendRemoveFileEntry(new RemoveFileEntry(addFileEntry.getPath(), writeTimestamp, true));
 
                 Optional<Long> fileRecords = addFileEntry.getStats().flatMap(DeltaLakeFileStatistics::getNumRecords);
@@ -3488,10 +3504,10 @@ public class DeltaLakeMetadata
         }
     }
 
-    private List<AddFileEntry> getAddFileEntriesMatchingEnforcedPartitionConstraint(ConnectorSession session, DeltaLakeTableHandle tableHandle)
+    private CloseableIterator<AddFileEntry> getAddFileEntriesMatchingEnforcedPartitionConstraint(ConnectorSession session, DeltaLakeTableHandle tableHandle)
     {
         TableSnapshot tableSnapshot = getSnapshot(session, tableHandle);
-        List<AddFileEntry> validDataFiles = transactionLogAccess.getActiveFiles(
+        CloseableIterator<AddFileEntry> validDataFiles = transactionLogAccess.getActiveFiles(
                 tableSnapshot,
                 tableHandle.getMetadataEntry(),
                 tableHandle.getProtocolEntry(),
@@ -3503,9 +3519,9 @@ public class DeltaLakeMetadata
             return validDataFiles;
         }
         Map<DeltaLakeColumnHandle, Domain> enforcedDomains = enforcedPartitionConstraint.getDomains().orElseThrow();
-        return validDataFiles.stream()
-                .filter(addAction -> partitionMatchesPredicate(addAction.getCanonicalPartitionValues(), enforcedDomains))
-                .collect(toImmutableList());
+        return CloseableIterator.filter(
+                validDataFiles,
+                addAction -> partitionMatchesPredicate(addAction.getCanonicalPartitionValues(), enforcedDomains));
     }
 
     private static Map<String, DeltaLakeColumnStatistics> toDeltaLakeColumnStatistics(Collection<ComputedStatistics> computedStatistics)

@@ -23,6 +23,7 @@ import io.trino.filesystem.TrinoInputFile;
 import io.trino.parquet.Column;
 import io.trino.parquet.Field;
 import io.trino.parquet.ParquetReaderOptions;
+import io.trino.plugin.deltalake.CloseableIterator;
 import io.trino.plugin.deltalake.DeltaHiveTypeTranslator;
 import io.trino.plugin.deltalake.DeltaLakeColumnHandle;
 import io.trino.plugin.deltalake.DeltaLakeColumnMetadata;
@@ -62,6 +63,7 @@ import io.trino.spi.type.TypeSignature;
 import jakarta.annotation.Nullable;
 import org.joda.time.DateTimeZone;
 
+import java.io.IOException;
 import java.util.ArrayDeque;
 import java.util.List;
 import java.util.Map;
@@ -107,6 +109,7 @@ import static java.util.Objects.requireNonNull;
 
 public class CheckpointEntryIterator
         extends AbstractIterator<DeltaLakeTransactionLogEntry>
+        implements CloseableIterator<DeltaLakeTransactionLogEntry>
 {
     public enum EntryType
     {
@@ -761,6 +764,13 @@ public class CheckpointEntryIterator
         }
         pagePosition = 0;
         return true;
+    }
+
+    @Override
+    public void close()
+            throws IOException
+    {
+        pageSource.close();
     }
 
     private void fillNextEntries()

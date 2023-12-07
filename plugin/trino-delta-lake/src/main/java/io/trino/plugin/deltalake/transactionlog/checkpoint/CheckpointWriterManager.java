@@ -13,6 +13,7 @@
  */
 package io.trino.plugin.deltalake.transactionlog.checkpoint;
 
+import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
 import com.google.inject.Inject;
 import io.airlift.json.JsonCodec;
@@ -20,6 +21,7 @@ import io.trino.filesystem.Location;
 import io.trino.filesystem.TrinoFileSystem;
 import io.trino.filesystem.TrinoFileSystemFactory;
 import io.trino.filesystem.TrinoOutputFile;
+import io.trino.plugin.deltalake.CloseableIterator;
 import io.trino.plugin.deltalake.transactionlog.DeltaLakeTransactionLogEntry;
 import io.trino.plugin.deltalake.transactionlog.TableSnapshot;
 import io.trino.plugin.deltalake.transactionlog.TableSnapshot.MetadataAndProtocolEntry;
@@ -40,7 +42,6 @@ import java.util.Optional;
 
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Predicates.alwaysTrue;
-import static com.google.common.collect.ImmutableList.toImmutableList;
 import static io.trino.plugin.deltalake.DeltaLakeErrorCode.DELTA_LAKE_INVALID_SCHEMA;
 import static io.trino.plugin.deltalake.transactionlog.TransactionLogParser.LAST_CHECKPOINT_FILENAME;
 import static io.trino.plugin.deltalake.transactionlog.TransactionLogUtil.getTransactionLogDir;
@@ -97,8 +98,9 @@ public class CheckpointWriterManager
             CheckpointBuilder checkpointBuilder = new CheckpointBuilder();
 
             TrinoFileSystem fileSystem = fileSystemFactory.create(session);
-            List<DeltaLakeTransactionLogEntry> checkpointLogEntries = snapshot
-                    .getCheckpointTransactionLogEntries(
+            List<DeltaLakeTransactionLogEntry> checkpointLogEntries;
+            try (CloseableIterator<DeltaLakeTransactionLogEntry> checkpointEntryIterator = CloseableIterator.filter(
+                    snapshot.getCheckpointTransactionLogEntries(
                             session,
                             ImmutableSet.of(METADATA, PROTOCOL),
                             checkpointSchemaManager,
@@ -107,9 +109,10 @@ public class CheckpointWriterManager
                             fileFormatDataSourceStats,
                             Optional.empty(),
                             TupleDomain.all(),
-                            Optional.empty())
-                    .filter(entry -> entry.getMetaData() != null || entry.getProtocol() != null)
-                    .collect(toImmutableList());
+                            Optional.empty()),
+                    entry -> entry.getMetaData() != null || entry.getProtocol() != null)) {
+                checkpointLogEntries = ImmutableList.copyOf(checkpointEntryIterator);
+            }
 
             if (!checkpointLogEntries.isEmpty()) {
                 // TODO HACK: this call is required only to ensure that cachedMetadataEntry is set in snapshot (https://github.com/trinodb/trino/issues/12032),
@@ -132,17 +135,18 @@ public class CheckpointWriterManager
                 checkpointBuilder.addLogEntry(protocolLogEntry);
 
                 // read remaining entries from checkpoint register them in writer
-                snapshot.getCheckpointTransactionLogEntries(
-                                session,
-                                ImmutableSet.of(TRANSACTION, ADD, REMOVE, COMMIT),
-                                checkpointSchemaManager,
-                                typeManager,
-                                fileSystem,
-                                fileFormatDataSourceStats,
-                                Optional.of(new MetadataAndProtocolEntry(metadataLogEntry.getMetaData(), protocolLogEntry.getProtocol())),
-                                TupleDomain.all(),
-                                Optional.of(alwaysTrue()))
-                        .forEach(checkpointBuilder::addLogEntry);
+                try (CloseableIterator<DeltaLakeTransactionLogEntry> checkpointEntryIterator = snapshot.getCheckpointTransactionLogEntries(
+                        session,
+                        ImmutableSet.of(TRANSACTION, ADD, REMOVE, COMMIT),
+                        checkpointSchemaManager,
+                        typeManager,
+                        fileSystem,
+                        fileFormatDataSourceStats,
+                        Optional.of(new MetadataAndProtocolEntry(metadataLogEntry.getMetaData(), protocolLogEntry.getProtocol())),
+                        TupleDomain.all(),
+                        Optional.of(alwaysTrue()))) {
+                    checkpointEntryIterator.forEachRemaining(checkpointBuilder::addLogEntry);
+                }
             }
 
             snapshot.getJsonTransactionLogEntries()
