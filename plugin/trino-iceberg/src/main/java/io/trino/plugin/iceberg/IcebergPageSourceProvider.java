@@ -334,8 +334,14 @@ public class IcebergPageSourceProvider
                     }
                 });
 
+        TupleDomain<IcebergColumnHandle> dynamicFilterTupleDomain = dynamicFilter.getCurrentPredicate().transformKeys(IcebergColumnHandle.class::cast);
+        if (dynamicFilterTupleDomain.getDomains().isPresent() && !dynamicFilterTupleDomain.isAll() && !partitionKeys.isEmpty()) {
+            // Filter out eventual partition filters from the dynamic filter because they are irrelevant at this stage
+            dynamicFilterTupleDomain = dynamicFilterTupleDomain
+                    .filter((columnHandle, domain) -> !partitionKeys.containsKey(columnHandle.getId()));
+        }
         TupleDomain<IcebergColumnHandle> effectivePredicate = unenforcedPredicate
-                .intersect(dynamicFilter.getCurrentPredicate().transformKeys(IcebergColumnHandle.class::cast))
+                .intersect(dynamicFilterTupleDomain)
                 .simplify(ICEBERG_DOMAIN_COMPACTION_THRESHOLD);
         if (effectivePredicate.isNone()) {
             return new EmptyPageSource();
