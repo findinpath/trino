@@ -45,6 +45,7 @@ import java.util.Optional;
 import java.util.Set;
 
 import static com.google.common.base.Verify.verify;
+import static com.google.common.collect.ImmutableSet.toImmutableSet;
 import static com.google.common.collect.Sets.difference;
 import static io.trino.plugin.base.util.Procedures.checkProcedureArgument;
 import static io.trino.plugin.hive.HiveErrorCode.HIVE_FILESYSTEM_ERROR;
@@ -137,21 +138,46 @@ public class SyncPartitionMetadataProcedure
                 accessControl.checkCanDeleteFromTable(null, new SchemaTableName(schemaName, tableName));
             }
 
-            Location tableLocation = Location.of(table.getStorage().getLocation());
-
-            Set<String> partitionsInMetastore = metastore.getPartitionNames(schemaName, tableName)
+            Set<String> canonicalPartitionNamesInMetastore = metastore.getPartitionNames(schemaName, tableName)
                     .map(ImmutableSet::copyOf)
                     .orElseThrow(() -> new TableNotFoundException(schemaTableName));
-            Set<String> partitionsInFileSystem = listPartitions(fileSystemFactory.create(session), tableLocation, table.getPartitionColumns(), caseSensitive);
+            String tableStorageLocation = table.getStorage().getLocation();
+            Set<String> actualPartitionNamesInMetastore = metastore.getPartitionsByNames(schemaName, tableName, ImmutableList.copyOf(canonicalPartitionNamesInMetastore))
+                    .values().stream()
+                    .flatMap(Optional::stream) // disregard partitions which disappeared in the meantime since listing the partition names
+                    .map(partition -> getPartitionNameFromPartitionLocation(partition.getStorage().getLocation(), tableStorageLocation))
+                    .collect(toImmutableSet());
+
+            Set<String> partitionsInFileSystem = listPartitions(fileSystemFactory.create(session), Location.of(tableStorageLocation), table.getPartitionColumns(), caseSensitive);
 
             // partitions in file system but not in metastore
-            Set<String> partitionsToAdd = difference(partitionsInFileSystem, partitionsInMetastore);
+            Set<String> partitionsToAdd = difference(partitionsInFileSystem, actualPartitionNamesInMetastore);
 
             // partitions in metastore but not in file system
-            Set<String> partitionsToDrop = difference(partitionsInMetastore, partitionsInFileSystem);
+            Set<String> partitionsToDrop = difference(actualPartitionNamesInMetastore, partitionsInFileSystem);
 
             syncPartitions(partitionsToAdd, partitionsToDrop, syncMode, metastore, session, table);
         }
+    }
+
+    private static String getPartitionNameFromPartitionLocation(String partitionLocation, String tableLocation)
+    {
+        if (!partitionLocation.startsWith(tableLocation)) {
+            throw new IllegalArgumentException("Partition location '%s' does not belong to base table location '%s'".formatted(partitionLocation, tableLocation));
+        }
+
+        String partitionName = partitionLocation.substring(tableLocation.length());
+
+        if (partitionName.startsWith("/")) {
+            // Remove eventual forward slash from the name of the partition
+            partitionName = partitionName.replaceFirst("^/+", "");
+        }
+        if (partitionName.endsWith("/")) {
+            // Remove eventual trailing slash from the name of the partition
+            partitionName = partitionName.replaceFirst("/+$", "");
+        }
+
+        return partitionName;
     }
 
     private static Set<String> listPartitions(TrinoFileSystem fileSystem, Location directory, List<Column> partitionColumns, boolean caseSensitive)
