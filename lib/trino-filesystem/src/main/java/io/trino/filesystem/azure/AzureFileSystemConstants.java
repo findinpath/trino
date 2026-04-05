@@ -15,7 +15,7 @@ package io.trino.filesystem.azure;
 
 public final class AzureFileSystemConstants
 {
-    public static final String EXTRA_CREDENTIALS_AZURE_SAS_TOKEN_PREFIX = "internal$azure_sas_token_";
+    public static final String EXTRA_CREDENTIALS_AZURE_SAS_TOKEN_PREFIX = "internal$azure_sas_token_prefix$";
 
     private AzureFileSystemConstants() {}
 }

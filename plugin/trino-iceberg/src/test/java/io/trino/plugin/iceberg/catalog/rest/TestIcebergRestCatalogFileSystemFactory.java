@@ -165,7 +165,7 @@ final class TestIcebergRestCatalogFileSystemFactory
         factory.create(originalIdentity, ImmutableMap.of());
 
         ConnectorIdentity identity = capturedIdentity.get();
-        assertThat(identity).isSameAs(originalIdentity);
+        assertThat(identity.getExtraCredentials()).isEmpty();
     }
 
     @Test

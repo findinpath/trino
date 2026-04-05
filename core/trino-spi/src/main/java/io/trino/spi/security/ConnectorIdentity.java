@@ -32,7 +32,7 @@ public class ConnectorIdentity
     private final Optional<SelectedRole> connectorRole;
     private final Map<String, String> extraCredentials;
 
-    private ConnectorIdentity(
+    protected ConnectorIdentity(
             String user,
             Set<String> groups,
             Optional<Principal> principal,

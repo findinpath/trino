@@ -24,7 +24,6 @@ import org.apache.iceberg.azure.AzureProperties;
 import org.apache.iceberg.gcp.GCPProperties;
 
 import java.util.Map;
-import java.util.Map.Entry;
 
 import static io.trino.filesystem.azure.AzureFileSystemConstants.EXTRA_CREDENTIALS_AZURE_SAS_TOKEN_PREFIX;
 import static io.trino.filesystem.gcs.GcsFileSystemConstants.EXTRA_CREDENTIALS_GCS_OAUTH_TOKEN_EXPIRES_AT_PROPERTY;
@@ -42,7 +41,9 @@ public class IcebergRestCatalogFileSystemFactory
     private final boolean vendedCredentialsEnabled;
 
     @Inject
-    public IcebergRestCatalogFileSystemFactory(TrinoFileSystemFactory fileSystemFactory, IcebergRestCatalogConfig config)
+    public IcebergRestCatalogFileSystemFactory(
+            TrinoFileSystemFactory fileSystemFactory,
+            IcebergRestCatalogConfig config)
     {
         this.fileSystemFactory = requireNonNull(fileSystemFactory, "fileSystemFactory is null");
         this.vendedCredentialsEnabled = config.isVendedCredentialsEnabled();
@@ -53,7 +54,6 @@ public class IcebergRestCatalogFileSystemFactory
     {
         if (vendedCredentialsEnabled) {
             ImmutableMap.Builder<String, String> extraCredentialsBuilder = ImmutableMap.builder();
-
             // handle s3
             if (fileIoProperties.containsKey(S3FileIOProperties.ACCESS_KEY_ID) &&
                     fileIoProperties.containsKey(S3FileIOProperties.SECRET_ACCESS_KEY) &&
@@ -72,13 +72,12 @@ public class IcebergRestCatalogFileSystemFactory
             }
 
             // handle azure
-            for (Entry<String, String> entry : fileIoProperties.entrySet()) {
+            for (Map.Entry<String, String> entry : fileIoProperties.entrySet()) {
                 if (entry.getKey().startsWith(AzureProperties.ADLS_SAS_TOKEN_PREFIX)) {
                     String account = entry.getKey().substring(AzureProperties.ADLS_SAS_TOKEN_PREFIX.length());
                     extraCredentialsBuilder.put(EXTRA_CREDENTIALS_AZURE_SAS_TOKEN_PREFIX + account, entry.getValue());
                 }
             }
-
             Map<String, String> extraCredentials = extraCredentialsBuilder.buildOrThrow();
             if (!extraCredentials.isEmpty()) {
                 ConnectorIdentity identityWithExtraCredentials = ConnectorIdentity.forUser(identity.getUser())
@@ -90,6 +89,7 @@ public class IcebergRestCatalogFileSystemFactory
                         .build();
                 return fileSystemFactory.create(identityWithExtraCredentials);
             }
+            return fileSystemFactory.create(identity);
         }
 
         return fileSystemFactory.create(identity);

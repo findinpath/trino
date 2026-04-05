@@ -19,10 +19,10 @@ import io.trino.filesystem.s3.S3FileSystemConfig.StorageClassType;
 import io.trino.spi.security.ConnectorIdentity;
 import software.amazon.awssdk.auth.credentials.AwsCredentialsProvider;
 import software.amazon.awssdk.auth.credentials.AwsSessionCredentials;
-import software.amazon.awssdk.auth.credentials.StaticCredentialsProvider;
 import software.amazon.awssdk.awscore.AwsRequestOverrideConfiguration;
 import software.amazon.awssdk.services.s3.model.RequestPayer;
 
+import java.util.Map;
 import java.util.Optional;
 
 import static com.google.common.base.Preconditions.checkArgument;
@@ -63,11 +63,14 @@ record S3Context(
     public S3Context withCredentials(ConnectorIdentity identity)
     {
         if (identity.getExtraCredentials().containsKey(EXTRA_CREDENTIALS_ACCESS_KEY_PROPERTY)) {
-            AwsCredentialsProvider credentialsProvider = StaticCredentialsProvider.create(AwsSessionCredentials.create(
-                    identity.getExtraCredentials().get(EXTRA_CREDENTIALS_ACCESS_KEY_PROPERTY),
-                    identity.getExtraCredentials().get(EXTRA_CREDENTIALS_SECRET_KEY_PROPERTY),
-                    identity.getExtraCredentials().get(EXTRA_CREDENTIALS_SESSION_TOKEN_PROPERTY)));
-            return withCredentialsProviderOverride(credentialsProvider);
+            AwsCredentialsProvider awsProvider = () -> {
+                Map<String, String> extraCredentials = identity.getExtraCredentials();
+                return AwsSessionCredentials.create(
+                        extraCredentials.get(EXTRA_CREDENTIALS_ACCESS_KEY_PROPERTY),
+                        extraCredentials.get(EXTRA_CREDENTIALS_SECRET_KEY_PROPERTY),
+                        extraCredentials.get(EXTRA_CREDENTIALS_SESSION_TOKEN_PROPERTY));
+            };
+            return withCredentialsProviderOverride(awsProvider);
         }
         return this;
     }

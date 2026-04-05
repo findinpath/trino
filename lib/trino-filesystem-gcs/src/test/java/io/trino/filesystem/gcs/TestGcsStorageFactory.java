@@ -16,6 +16,7 @@ package io.trino.filesystem.gcs;
 import com.google.auth.Credentials;
 import com.google.auth.oauth2.AccessToken;
 import com.google.auth.oauth2.GoogleCredentials;
+import com.google.auth.oauth2.OAuth2CredentialsWithRefresh;
 import com.google.cloud.NoCredentials;
 import com.google.cloud.storage.Storage;
 import com.google.common.collect.ImmutableMap;
@@ -55,6 +56,7 @@ final class TestGcsStorageFactory
         ConnectorIdentity identity = ConnectorIdentity.forUser("test")
                 .withExtraCredentials(ImmutableMap.of(
                         EXTRA_CREDENTIALS_GCS_OAUTH_TOKEN_PROPERTY, "ya29.test-token"))
+
                 .build();
 
         try (Storage storage = storageFactory.create(identity)) {
@@ -82,8 +84,8 @@ final class TestGcsStorageFactory
 
         try (Storage storage = storageFactory.create(identity)) {
             Credentials credentials = storage.getOptions().getCredentials();
-            assertThat(credentials).isInstanceOf(GoogleCredentials.class);
-            GoogleCredentials googleCredentials = (GoogleCredentials) credentials;
+            assertThat(credentials).isInstanceOf(OAuth2CredentialsWithRefresh.class);
+            OAuth2CredentialsWithRefresh googleCredentials = (OAuth2CredentialsWithRefresh) credentials;
             AccessToken accessToken = googleCredentials.getAccessToken();
             assertThat(accessToken).isNotNull();
             assertThat(accessToken.getTokenValue()).isEqualTo("ya29.test-token");

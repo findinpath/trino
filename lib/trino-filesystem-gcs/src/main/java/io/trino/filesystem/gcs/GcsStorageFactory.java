@@ -14,8 +14,10 @@
 package io.trino.filesystem.gcs;
 
 import com.google.api.gax.retrying.RetrySettings;
+import com.google.auth.Credentials;
 import com.google.auth.oauth2.AccessToken;
 import com.google.auth.oauth2.GoogleCredentials;
+import com.google.auth.oauth2.OAuth2CredentialsWithRefresh;
 import com.google.cloud.storage.Storage;
 import com.google.cloud.storage.StorageOptions;
 import com.google.inject.Inject;
@@ -105,7 +107,27 @@ public class GcsStorageFactory
                     .map(Long::parseLong)
                     .map(Instant::ofEpochMilli)
                     .map(Date::from);
-            builder.setCredentials(GoogleCredentials.create(new AccessToken(accessToken, expireAt.orElse(null))));
+
+            Credentials credentials;
+            if (expireAt.isPresent()) {
+                AccessToken initialToken = new AccessToken(accessToken, expireAt.get());
+
+                credentials = OAuth2CredentialsWithRefresh.newBuilder()
+                        .setAccessToken(initialToken)
+                        .setRefreshHandler(() -> {
+                            String freshToken = identity.getExtraCredentials().get(EXTRA_CREDENTIALS_GCS_OAUTH_TOKEN_PROPERTY);
+                            Optional<Date> freshExpireAt = Optional.ofNullable(identity.getExtraCredentials().get(EXTRA_CREDENTIALS_GCS_OAUTH_TOKEN_EXPIRES_AT_PROPERTY))
+                                    .map(Long::parseLong)
+                                    .map(Instant::ofEpochMilli)
+                                    .map(Date::from);
+                            return new AccessToken(freshToken, freshExpireAt.orElse(null));
+                        })
+                        .build();
+            }
+            else {
+                credentials = GoogleCredentials.create(new AccessToken(accessToken, null));
+            }
+            builder.setCredentials(credentials);
 
             String effectiveProjectId = identity.getExtraCredentials().getOrDefault(EXTRA_CREDENTIALS_GCS_PROJECT_ID_PROPERTY, projectId);
             if (effectiveProjectId != null) {

@@ -15,37 +15,49 @@ package io.trino.filesystem.azure;
 
 import com.azure.storage.blob.BlobContainerClientBuilder;
 import com.azure.storage.file.datalake.DataLakeServiceClientBuilder;
-import com.google.common.collect.ImmutableMap;
+import io.trino.spi.security.ConnectorIdentity;
 
 import java.util.Map;
+
+import static com.google.common.collect.ImmutableMap.toImmutableMap;
+import static io.trino.filesystem.azure.AzureFileSystemConstants.EXTRA_CREDENTIALS_AZURE_SAS_TOKEN_PREFIX;
+import static java.util.Objects.requireNonNull;
 
 public final class AzureAuthSasToken
         implements AzureAuth
 {
-    private final Map<String, String> sasTokens;
+    private final ConnectorIdentity identity;
 
-    public AzureAuthSasToken(Map<String, String> sasTokens)
+    public AzureAuthSasToken(ConnectorIdentity identity)
     {
-        this.sasTokens = ImmutableMap.copyOf(sasTokens);
+        this.identity = requireNonNull(identity, "identity is null");
     }
 
     @Override
     public void setAuth(String storageAccount, BlobContainerClientBuilder builder)
     {
-        String sasToken = sasTokens.get(storageAccount);
-        if (sasToken == null) {
-            throw new IllegalStateException("No SAS token provided for storage account: " + storageAccount);
-        }
+        String sasToken = getSasToken(storageAccount);
         builder.sasToken(sasToken);
     }
 
     @Override
     public void setAuth(String storageAccount, DataLakeServiceClientBuilder builder)
     {
+        String sasToken = getSasToken(storageAccount);
+        builder.sasToken(sasToken);
+    }
+
+    private String getSasToken(String storageAccount)
+    {
+        Map<String, String> extraCredentials = identity.getExtraCredentials();
+        Map<String, String> sasTokens = extraCredentials.entrySet().stream()
+                .filter(e -> e.getKey().startsWith(EXTRA_CREDENTIALS_AZURE_SAS_TOKEN_PREFIX))
+                .collect(toImmutableMap(e -> e.getKey().substring(EXTRA_CREDENTIALS_AZURE_SAS_TOKEN_PREFIX.length()), Map.Entry::getValue));
+
         String sasToken = sasTokens.get(storageAccount);
         if (sasToken == null) {
             throw new IllegalStateException("No SAS token provided for storage account: " + storageAccount);
         }
-        builder.sasToken(sasToken);
+        return sasToken;
     }
 }

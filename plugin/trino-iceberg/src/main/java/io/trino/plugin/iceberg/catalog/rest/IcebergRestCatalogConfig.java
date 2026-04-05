@@ -16,6 +16,7 @@ package io.trino.plugin.iceberg.catalog.rest;
 import io.airlift.configuration.Config;
 import io.airlift.configuration.ConfigDescription;
 import io.airlift.configuration.DefunctConfig;
+import io.airlift.configuration.LegacyConfig;
 import io.airlift.units.Duration;
 import io.airlift.units.MinDuration;
 import jakarta.validation.constraints.NotNull;
@@ -60,6 +61,10 @@ public class IcebergRestCatalogConfig
     private boolean viewEndpointsEnabled = true;
     private boolean caseInsensitiveNameMatching;
     private Duration caseInsensitiveNameMatchingCacheTtl = new Duration(1, MINUTES);
+
+    private boolean nativeAzureEnabled;
+    private boolean nativeS3Enabled;
+    private boolean nativeGcsEnabled;
 
     @NotNull
     public URI getBaseUri()
@@ -236,6 +241,48 @@ public class IcebergRestCatalogConfig
     public IcebergRestCatalogConfig setCaseInsensitiveNameMatchingCacheTtl(Duration caseInsensitiveNameMatchingCacheTtl)
     {
         this.caseInsensitiveNameMatchingCacheTtl = caseInsensitiveNameMatchingCacheTtl;
+        return this;
+    }
+
+    public boolean isNativeAzureEnabled()
+    {
+        return nativeAzureEnabled;
+    }
+
+    // Duplicated from FileSystemConfig to control which vended credentials factories are available
+    @LegacyConfig("fs.native-azure.enabled")
+    @Config("fs.azure.enabled")
+    public IcebergRestCatalogConfig setNativeAzureEnabled(boolean nativeAzureEnabled)
+    {
+        this.nativeAzureEnabled = nativeAzureEnabled;
+        return this;
+    }
+
+    public boolean isNativeS3Enabled()
+    {
+        return nativeS3Enabled;
+    }
+
+    // Duplicated from FileSystemConfig to control which vended credentials factories are available
+    @LegacyConfig("fs.native-s3.enabled")
+    @Config("fs.s3.enabled")
+    public IcebergRestCatalogConfig setNativeS3Enabled(boolean nativeS3Enabled)
+    {
+        this.nativeS3Enabled = nativeS3Enabled;
+        return this;
+    }
+
+    public boolean isNativeGcsEnabled()
+    {
+        return nativeGcsEnabled;
+    }
+
+    // Duplicated from FileSystemConfig to control which vended credentials factories are available
+    @LegacyConfig("fs.native-gcs.enabled")
+    @Config("fs.gcs.enabled")
+    public IcebergRestCatalogConfig setNativeGcsEnabled(boolean nativeGcsEnabled)
+    {
+        this.nativeGcsEnabled = nativeGcsEnabled;
         return this;
     }
 }
