@@ -15,6 +15,7 @@ package io.trino.plugin.iceberg.catalog.rest;
 
 import com.google.common.collect.ImmutableMap;
 import io.trino.filesystem.TrinoFileSystemFactory;
+import io.trino.spi.NodeVersion;
 import io.trino.spi.security.ConnectorIdentity;
 import org.apache.iceberg.aws.s3.S3FileIOProperties;
 import org.apache.iceberg.azure.AzureProperties;
@@ -47,7 +48,11 @@ final class TestIcebergRestCatalogFileSystemFactory
         IcebergRestCatalogConfig config = new IcebergRestCatalogConfig()
                 .setBaseUri("http://localhost")
                 .setVendedCredentialsEnabled(true);
-        IcebergRestCatalogFileSystemFactory factory = new IcebergRestCatalogFileSystemFactory(delegate, config);
+        IcebergRestCatalogPropertiesProvider catalogPropertiesProvider = new IcebergRestCatalogPropertiesProvider(
+                config,
+                new NoneSecurityProperties(),
+                new NodeVersion("test"));
+        IcebergRestCatalogFileSystemFactory factory = new IcebergRestCatalogFileSystemFactory(delegate, config, catalogPropertiesProvider);
 
         Map<String, String> fileIoProperties = ImmutableMap.of(
                 S3FileIOProperties.ACCESS_KEY_ID, "test-access-key",
@@ -76,7 +81,11 @@ final class TestIcebergRestCatalogFileSystemFactory
         IcebergRestCatalogConfig config = new IcebergRestCatalogConfig()
                 .setBaseUri("http://localhost")
                 .setVendedCredentialsEnabled(true);
-        IcebergRestCatalogFileSystemFactory factory = new IcebergRestCatalogFileSystemFactory(delegate, config);
+        IcebergRestCatalogPropertiesProvider catalogPropertiesProvider = new IcebergRestCatalogPropertiesProvider(
+                config,
+                new NoneSecurityProperties(),
+                new NodeVersion("test"));
+        IcebergRestCatalogFileSystemFactory factory = new IcebergRestCatalogFileSystemFactory(delegate, config, catalogPropertiesProvider);
 
         Map<String, String> fileIoProperties = ImmutableMap.of(
                 GCPProperties.GCS_OAUTH2_TOKEN, "ya29.test-token");
@@ -103,7 +112,11 @@ final class TestIcebergRestCatalogFileSystemFactory
         IcebergRestCatalogConfig config = new IcebergRestCatalogConfig()
                 .setBaseUri("http://localhost")
                 .setVendedCredentialsEnabled(true);
-        IcebergRestCatalogFileSystemFactory factory = new IcebergRestCatalogFileSystemFactory(delegate, config);
+        IcebergRestCatalogPropertiesProvider catalogPropertiesProvider = new IcebergRestCatalogPropertiesProvider(
+                config,
+                new NoneSecurityProperties(),
+                new NodeVersion("test"));
+        IcebergRestCatalogFileSystemFactory factory = new IcebergRestCatalogFileSystemFactory(delegate, config, catalogPropertiesProvider);
 
         Map<String, String> fileIoProperties = ImmutableMap.<String, String>builder()
                 .put(GCPProperties.GCS_OAUTH2_TOKEN, "ya29.test-token")
@@ -133,7 +146,11 @@ final class TestIcebergRestCatalogFileSystemFactory
         IcebergRestCatalogConfig config = new IcebergRestCatalogConfig()
                 .setBaseUri("http://localhost")
                 .setVendedCredentialsEnabled(false);
-        IcebergRestCatalogFileSystemFactory factory = new IcebergRestCatalogFileSystemFactory(delegate, config);
+        IcebergRestCatalogPropertiesProvider catalogPropertiesProvider = new IcebergRestCatalogPropertiesProvider(
+                config,
+                new NoneSecurityProperties(),
+                new NodeVersion("test"));
+        IcebergRestCatalogFileSystemFactory factory = new IcebergRestCatalogFileSystemFactory(delegate, config, catalogPropertiesProvider);
 
         Map<String, String> fileIoProperties = ImmutableMap.of(
                 GCPProperties.GCS_OAUTH2_TOKEN, "ya29.test-token",
@@ -159,7 +176,11 @@ final class TestIcebergRestCatalogFileSystemFactory
         IcebergRestCatalogConfig config = new IcebergRestCatalogConfig()
                 .setBaseUri("http://localhost")
                 .setVendedCredentialsEnabled(true);
-        IcebergRestCatalogFileSystemFactory factory = new IcebergRestCatalogFileSystemFactory(delegate, config);
+        IcebergRestCatalogPropertiesProvider catalogPropertiesProvider = new IcebergRestCatalogPropertiesProvider(
+                config,
+                new NoneSecurityProperties(),
+                new NodeVersion("test"));
+        IcebergRestCatalogFileSystemFactory factory = new IcebergRestCatalogFileSystemFactory(delegate, config, catalogPropertiesProvider);
 
         ConnectorIdentity originalIdentity = ConnectorIdentity.ofUser("test");
         factory.create(originalIdentity, ImmutableMap.of());
@@ -180,7 +201,11 @@ final class TestIcebergRestCatalogFileSystemFactory
         IcebergRestCatalogConfig config = new IcebergRestCatalogConfig()
                 .setBaseUri("http://localhost")
                 .setVendedCredentialsEnabled(true);
-        IcebergRestCatalogFileSystemFactory factory = new IcebergRestCatalogFileSystemFactory(delegate, config);
+        IcebergRestCatalogPropertiesProvider catalogPropertiesProvider = new IcebergRestCatalogPropertiesProvider(
+                config,
+                new NoneSecurityProperties(),
+                new NodeVersion("test"));
+        IcebergRestCatalogFileSystemFactory factory = new IcebergRestCatalogFileSystemFactory(delegate, config, catalogPropertiesProvider);
 
         Map<String, String> fileIoProperties = ImmutableMap.of(
                 AzureProperties.ADLS_SAS_TOKEN_PREFIX + "mystorageaccount", "sv=2022-test-sas-token");
@@ -205,7 +230,11 @@ final class TestIcebergRestCatalogFileSystemFactory
         IcebergRestCatalogConfig config = new IcebergRestCatalogConfig()
                 .setBaseUri("http://localhost")
                 .setVendedCredentialsEnabled(true);
-        IcebergRestCatalogFileSystemFactory factory = new IcebergRestCatalogFileSystemFactory(delegate, config);
+        IcebergRestCatalogPropertiesProvider catalogPropertiesProvider = new IcebergRestCatalogPropertiesProvider(
+                config,
+                new NoneSecurityProperties(),
+                new NodeVersion("test"));
+        IcebergRestCatalogFileSystemFactory factory = new IcebergRestCatalogFileSystemFactory(delegate, config, catalogPropertiesProvider);
 
         Map<String, String> fileIoProperties = ImmutableMap.of(
                 AzureProperties.ADLS_SAS_TOKEN_PREFIX + "account1", "sas-token-1",
@@ -232,7 +261,11 @@ final class TestIcebergRestCatalogFileSystemFactory
         IcebergRestCatalogConfig config = new IcebergRestCatalogConfig()
                 .setBaseUri("http://localhost")
                 .setVendedCredentialsEnabled(true);
-        IcebergRestCatalogFileSystemFactory factory = new IcebergRestCatalogFileSystemFactory(delegate, config);
+        IcebergRestCatalogPropertiesProvider catalogPropertiesProvider = new IcebergRestCatalogPropertiesProvider(
+                config,
+                new NoneSecurityProperties(),
+                new NodeVersion("test"));
+        IcebergRestCatalogFileSystemFactory factory = new IcebergRestCatalogFileSystemFactory(delegate, config, catalogPropertiesProvider);
 
         Map<String, String> fileIoProperties = ImmutableMap.of(AzureProperties.ADLS_SAS_TOKEN_PREFIX + "mystorageaccount", "sv=2022-test-sas-token");
 
@@ -256,7 +289,11 @@ final class TestIcebergRestCatalogFileSystemFactory
         IcebergRestCatalogConfig config = new IcebergRestCatalogConfig()
                 .setBaseUri("http://localhost")
                 .setVendedCredentialsEnabled(false);
-        IcebergRestCatalogFileSystemFactory factory = new IcebergRestCatalogFileSystemFactory(delegate, config);
+        IcebergRestCatalogPropertiesProvider catalogPropertiesProvider = new IcebergRestCatalogPropertiesProvider(
+                config,
+                new NoneSecurityProperties(),
+                new NodeVersion("test"));
+        IcebergRestCatalogFileSystemFactory factory = new IcebergRestCatalogFileSystemFactory(delegate, config, catalogPropertiesProvider);
 
         Map<String, String> fileIoProperties = ImmutableMap.of(
                 AzureProperties.ADLS_SAS_TOKEN_PREFIX + "mystorageaccount", "sv=2022-test-sas-token");

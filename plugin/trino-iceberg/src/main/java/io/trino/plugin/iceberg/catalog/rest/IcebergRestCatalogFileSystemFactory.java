@@ -39,14 +39,17 @@ public class IcebergRestCatalogFileSystemFactory
 {
     private final TrinoFileSystemFactory fileSystemFactory;
     private final boolean vendedCredentialsEnabled;
+    private final Map<String, String> catalogProperties;
 
     @Inject
     public IcebergRestCatalogFileSystemFactory(
             TrinoFileSystemFactory fileSystemFactory,
-            IcebergRestCatalogConfig config)
+            IcebergRestCatalogConfig config,
+            IcebergRestCatalogPropertiesProvider catalogPropertiesProvider)
     {
         this.fileSystemFactory = requireNonNull(fileSystemFactory, "fileSystemFactory is null");
         this.vendedCredentialsEnabled = config.isVendedCredentialsEnabled();
+        this.catalogProperties = ImmutableMap.copyOf(catalogPropertiesProvider.getCatalogProperties());
     }
 
     @Override
@@ -79,17 +82,16 @@ public class IcebergRestCatalogFileSystemFactory
                 }
             }
             Map<String, String> extraCredentials = extraCredentialsBuilder.buildOrThrow();
-            if (!extraCredentials.isEmpty()) {
-                ConnectorIdentity identityWithExtraCredentials = ConnectorIdentity.forUser(identity.getUser())
-                        .withGroups(identity.getGroups())
-                        .withPrincipal(identity.getPrincipal())
-                        .withEnabledSystemRoles(identity.getEnabledSystemRoles())
-                        .withConnectorRole(identity.getConnectorRole())
-                        .withExtraCredentials(extraCredentials)
-                        .build();
-                return fileSystemFactory.create(identityWithExtraCredentials);
-            }
-            return fileSystemFactory.create(identity);
+            IcebergRestConnectorIdentity identityWithExtraCredentials = IcebergRestConnectorIdentity.forIdentityUser(identity.getUser())
+                    .withGroups(identity.getGroups())
+                    .withPrincipal(identity.getPrincipal())
+                    .withEnabledSystemRoles(identity.getEnabledSystemRoles())
+                    .withConnectorRole(identity.getConnectorRole())
+                    .withExtraCredentials(extraCredentials)
+                    .withCatalogProperties(catalogProperties)
+                    .withFileIoProperties(fileIoProperties)
+                    .build();
+            return fileSystemFactory.create(identityWithExtraCredentials);
         }
 
         return fileSystemFactory.create(identity);
