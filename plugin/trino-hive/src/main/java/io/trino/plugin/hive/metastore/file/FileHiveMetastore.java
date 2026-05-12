@@ -49,6 +49,7 @@ import io.trino.plugin.hive.PartitionNotFoundException;
 import io.trino.plugin.hive.TableType;
 import io.trino.plugin.hive.metastore.file.FileHiveMetastoreConfig.VersionCompatibility;
 import io.trino.spi.NodeVersion;
+import io.trino.spi.StandardErrorCode;
 import io.trino.spi.TrinoException;
 import io.trino.spi.connector.ColumnNotFoundException;
 import io.trino.spi.connector.SchemaNotFoundException;
@@ -873,9 +874,23 @@ public class FileHiveMetastore
         }
     }
 
+    private int throwTimeoutExceptionOnAlterPartitionCall = -1;
+
+    public void setThrowTimeoutExceptionOnAlterPartitionCall(int throwTimeoutExceptionOnAlterPartitionCall)
+    {
+        this.throwTimeoutExceptionOnAlterPartitionCall = throwTimeoutExceptionOnAlterPartitionCall;
+    }
+
     @Override
     public synchronized void alterPartition(String databaseName, String tableName, PartitionWithStatistics partitionWithStatistics)
     {
+        if (throwTimeoutExceptionOnAlterPartitionCall >= 0) {
+            throwTimeoutExceptionOnAlterPartitionCall--;
+        }
+        if (throwTimeoutExceptionOnAlterPartitionCall == 0) {
+            throw new TrinoException(StandardErrorCode.GENERIC_INTERNAL_ERROR, "timeout exception");
+        }
+
         Table table = getRequiredTable(databaseName, tableName);
 
         Partition partition = partitionWithStatistics.getPartition();
