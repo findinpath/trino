@@ -36,6 +36,7 @@ import io.trino.metastore.StatisticsUpdateMode;
 import io.trino.metastore.Table;
 import io.trino.metastore.TableAlreadyExistsException;
 import io.trino.metastore.TableInfo;
+import io.trino.spi.StandardErrorCode;
 import io.trino.spi.TrinoException;
 import io.trino.spi.connector.SchemaNotFoundException;
 import io.trino.spi.connector.SchemaTableName;
@@ -136,9 +137,19 @@ public class BridgingHiveMetastore
         delegate.updateTableStatistics(databaseName, tableName, acidWriteId, mode, statisticsUpdate);
     }
 
+    private boolean throwTimeoutExceptionOnUpdatePartitionStatistics;
+
+    public void setThrowTimeoutExceptionOnUpdatePartitionStatistics(boolean throwTimeoutException)
+    {
+        this.throwTimeoutExceptionOnUpdatePartitionStatistics = throwTimeoutException;
+    }
+
     @Override
     public void updatePartitionStatistics(Table table, StatisticsUpdateMode mode, Map<String, PartitionStatistics> partitionUpdates)
     {
+        if (throwTimeoutExceptionOnUpdatePartitionStatistics) {
+            throw new TrinoException(StandardErrorCode.GENERIC_INTERNAL_ERROR, "timeout exception");
+        }
         io.trino.hive.thrift.metastore.Table metastoreTable = toMetastoreApiTable(table);
         partitionUpdates.forEach((partitionName, update) -> delegate.updatePartitionStatistics(metastoreTable, partitionName, mode, update));
     }
