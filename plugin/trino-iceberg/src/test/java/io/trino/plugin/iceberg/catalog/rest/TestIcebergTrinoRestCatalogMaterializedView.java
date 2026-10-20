@@ -70,6 +70,7 @@ import static io.trino.server.testing.TestingTrinoServer.SESSION_START_TIME_PROP
 import static io.trino.testing.TestingNames.randomNameSuffix;
 import static java.lang.String.format;
 import static java.util.Map.entry;
+import static java.util.UUID.randomUUID;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.junit.jupiter.api.TestInstance.Lifecycle.PER_CLASS;
@@ -650,51 +651,236 @@ public class TestIcebergTrinoRestCatalogMaterializedView
     }
 
     @Test
-    public void testMaterializedViewFreshnessUnknownForForeignEngineRefresh()
+    public void testMaterializedViewFreshnessForForeignEngineRefresh()
     {
-        String schema = getSession().getSchema().orElseThrow();
         String sourceTableName = "source_table_" + randomNameSuffix();
         String materializedViewName = "test_mv_foreign_refresh_" + randomNameSuffix();
-        String freshnessQuery = format(
-                "SELECT freshness FROM system.metadata.materialized_views WHERE catalog_name = CURRENT_CATALOG AND schema_name = CURRENT_SCHEMA AND name = '%s'",
-                materializedViewName);
 
         assertUpdate("CREATE TABLE " + sourceTableName + " (a bigint)");
         assertUpdate("INSERT INTO " + sourceTableName + " VALUES 1", 1);
 
         assertUpdate("CREATE MATERIALIZED VIEW " + materializedViewName + " AS SELECT * FROM " + sourceTableName);
         assertUpdate("REFRESH MATERIALIZED VIEW " + materializedViewName, 1);
-        assertQuery(freshnessQuery, "VALUES 'FRESH'");
+        assertFreshness(materializedViewName, "FRESH");
 
-        // Simulate a refresh by another engine: a new snapshot on the storage table with a structurally
-        // valid RefreshState (so the recorded source still verifies cleanly), but without Trino's own
-        // trino_query_id fingerprint.
-        View view = backend.loadView(TableIdentifier.of(Namespace.of(schema), materializedViewName));
-        Table storageTable = backend.loadTable(view.currentVersion().storageTable());
-        Table sourceTable = backend.loadTable(TableIdentifier.of(Namespace.of(schema), sourceTableName));
-        RefreshState foreignRefreshState = new RefreshState(
-                view.currentVersion().versionId(),
-                ImmutableList.of(new SourceTableState(
-                        sourceTableName,
-                        ImmutableList.of(schema),
-                        null,
-                        sourceTable.uuid().toString(),
-                        sourceTable.currentSnapshot().snapshotId(),
-                        SnapshotRef.MAIN_BRANCH)),
-                Instant.now().toEpochMilli());
-        storageTable.newAppend()
-                .set(RefreshState.REFRESH_STATE_SUMMARY_KEY, RefreshStateParser.toJson(foreignRefreshState))
-                .commit();
+        // Simulate a refresh by another engine: a new snapshot on the storage table with a RefreshState, but
+        // without Trino's own trino_query_id fingerprint. Every dependency of the query is recorded, so
+        // the materialized view is fresh even though Trino did not perform the refresh.
+        commitForeignRefreshState(materializedViewName, ImmutableList.of(foreignTableState(sourceTableName, null)));
+        assertFreshness(materializedViewName, "FRESH");
 
-        assertQuery(freshnessQuery, "VALUES 'UNKNOWN'");
-
-        // Genuine staleness must still win over the "foreign refresh" verdict: altering the source now
-        // makes the foreign engine's own recorded source table state stale, not merely unknown.
+        // Genuine staleness must still be detected for a foreign refresh
         assertUpdate("INSERT INTO " + sourceTableName + " VALUES 2", 1);
-        assertQuery(freshnessQuery, "VALUES 'STALE'");
+        assertFreshness(materializedViewName, "STALE");
 
         assertUpdate("DROP MATERIALIZED VIEW " + materializedViewName);
         assertUpdate("DROP TABLE " + sourceTableName);
+    }
+
+    @Test
+    public void testForeignEngineRefreshWithOtherCatalogName()
+    {
+        String sourceTableName = "source_table_" + randomNameSuffix();
+        String materializedViewName = "test_mv_foreign_catalog_" + randomNameSuffix();
+
+        assertUpdate("CREATE TABLE " + sourceTableName + " AS SELECT 1 a", 1);
+        assertUpdate("CREATE MATERIALIZED VIEW " + materializedViewName + " AS SELECT * FROM " + sourceTableName);
+        assertUpdate("REFRESH MATERIALIZED VIEW " + materializedViewName, 1);
+
+        // The catalog name recorded by another engine is local to that engine: the table is matched by its UUID
+        commitForeignRefreshState(materializedViewName, ImmutableList.of(foreignTableState(sourceTableName, "spark_catalog")));
+        assertFreshness(materializedViewName, "FRESH");
+
+        // A table of another catalog which cannot be found in this one can't be verified, but doesn't make the view stale
+        commitForeignRefreshState(materializedViewName, ImmutableList.of(
+                foreignTableState(sourceTableName, "spark_catalog"),
+                new SourceTableState("missing_table", ImmutableList.of(getSession().getSchema().orElseThrow()), "spark_catalog", randomUUID().toString(), 1L, SnapshotRef.MAIN_BRANCH)));
+        assertFreshness(materializedViewName, "FRESH");
+
+        assertUpdate("DROP MATERIALIZED VIEW " + materializedViewName);
+        assertUpdate("DROP TABLE " + sourceTableName);
+    }
+
+    @Test
+    public void testForeignEngineRefreshWithIncompleteSourceStates()
+    {
+        String firstTableName = "source_table_" + randomNameSuffix();
+        String secondTableName = "source_table_" + randomNameSuffix();
+        String materializedViewName = "test_mv_foreign_incomplete_" + randomNameSuffix();
+
+        assertUpdate("CREATE TABLE " + firstTableName + " AS SELECT 1 a", 1);
+        assertUpdate("CREATE TABLE " + secondTableName + " AS SELECT 1 b", 1);
+        assertUpdate("CREATE MATERIALIZED VIEW " + materializedViewName + " AS SELECT a, b FROM " + firstTableName + " JOIN " + secondTableName + " ON a = b");
+        assertUpdate("REFRESH MATERIALIZED VIEW " + materializedViewName, 1);
+
+        // The second table is not recorded, so its state at refresh time is not known
+        commitForeignRefreshState(materializedViewName, ImmutableList.of(foreignTableState(firstTableName, "spark_catalog")));
+        assertFreshness(materializedViewName, "UNKNOWN");
+
+        // Nor is anything known when nothing is recorded
+        commitForeignRefreshState(materializedViewName, ImmutableList.of());
+        assertFreshness(materializedViewName, "UNKNOWN");
+
+        commitForeignRefreshState(materializedViewName, ImmutableList.of(
+                foreignTableState(firstTableName, "spark_catalog"),
+                foreignTableState(secondTableName, "spark_catalog")));
+        assertFreshness(materializedViewName, "FRESH");
+
+        assertUpdate("DROP MATERIALIZED VIEW " + materializedViewName);
+        assertUpdate("DROP TABLE " + firstTableName);
+        assertUpdate("DROP TABLE " + secondTableName);
+    }
+
+    @Test
+    public void testForeignEngineRefreshOnNestedView()
+    {
+        String sourceTableName = "source_table_" + randomNameSuffix();
+        String viewName = "test_view_" + randomNameSuffix();
+        String materializedViewName = "test_mv_foreign_nested_view_" + randomNameSuffix();
+
+        assertUpdate("CREATE TABLE " + sourceTableName + " AS SELECT 1 a", 1);
+        assertUpdate("CREATE VIEW " + viewName + " AS SELECT * FROM " + sourceTableName);
+        assertUpdate("CREATE MATERIALIZED VIEW " + materializedViewName + " AS SELECT * FROM " + viewName);
+        assertUpdate("REFRESH MATERIALIZED VIEW " + materializedViewName, 1);
+
+        // The view may have been replaced since the refresh, which only its recorded version would reveal
+        commitForeignRefreshState(materializedViewName, ImmutableList.of(foreignTableState(sourceTableName, "spark_catalog")));
+        assertFreshness(materializedViewName, "UNKNOWN");
+
+        // The tables the view depends on must be recorded as well
+        commitForeignRefreshState(materializedViewName, ImmutableList.of(foreignViewState(viewName, "spark_catalog")));
+        assertFreshness(materializedViewName, "UNKNOWN");
+
+        commitForeignRefreshState(materializedViewName, ImmutableList.of(
+                foreignViewState(viewName, "spark_catalog"),
+                foreignTableState(sourceTableName, "spark_catalog")));
+        assertFreshness(materializedViewName, "FRESH");
+
+        assertUpdate("CREATE OR REPLACE VIEW " + viewName + " AS SELECT a + 1 a FROM " + sourceTableName);
+        assertFreshness(materializedViewName, "STALE");
+
+        assertUpdate("DROP MATERIALIZED VIEW " + materializedViewName);
+        assertUpdate("DROP VIEW " + viewName);
+        assertUpdate("DROP TABLE " + sourceTableName);
+    }
+
+    @Test
+    public void testForeignEngineRefreshOnNestedMaterializedView()
+    {
+        String schema = getSession().getSchema().orElseThrow();
+        String sourceTableName = "source_table_" + randomNameSuffix();
+        String innerMaterializedViewName = "test_inner_mv_" + randomNameSuffix();
+        String outerMaterializedViewName = "test_outer_mv_" + randomNameSuffix();
+
+        assertUpdate("CREATE TABLE " + sourceTableName + " AS SELECT 1 a", 1);
+        assertUpdate("CREATE MATERIALIZED VIEW " + innerMaterializedViewName + " AS SELECT * FROM " + sourceTableName);
+        assertUpdate("REFRESH MATERIALIZED VIEW " + innerMaterializedViewName, 1);
+        assertUpdate("CREATE MATERIALIZED VIEW " + outerMaterializedViewName + " AS SELECT * FROM " + innerMaterializedViewName);
+        assertUpdate("REFRESH MATERIALIZED VIEW " + outerMaterializedViewName, 1);
+
+        TableIdentifier innerStorageTable = backend.loadView(TableIdentifier.of(Namespace.of(schema), innerMaterializedViewName)).currentVersion().storageTable();
+
+        // The nested materialized view treated as a table: its definition and its storage table are recorded
+        commitForeignRefreshState(outerMaterializedViewName, ImmutableList.of(
+                foreignViewState(innerMaterializedViewName, "spark_catalog"),
+                foreignTableState(innerStorageTable, "spark_catalog")));
+        assertFreshness(outerMaterializedViewName, "FRESH");
+
+        // The nested materialized view expanded as a view: its definition and the tables its query depends on are recorded
+        commitForeignRefreshState(outerMaterializedViewName, ImmutableList.of(
+                foreignViewState(innerMaterializedViewName, "spark_catalog"),
+                foreignTableState(TableIdentifier.of(Namespace.of(schema), sourceTableName), "spark_catalog")));
+        assertFreshness(outerMaterializedViewName, "FRESH");
+
+        // Without the definition of the nested materialized view, its replacement would go unnoticed
+        commitForeignRefreshState(outerMaterializedViewName, ImmutableList.of(
+                foreignTableState(TableIdentifier.of(Namespace.of(schema), sourceTableName), "spark_catalog")));
+        assertFreshness(outerMaterializedViewName, "UNKNOWN");
+
+        assertUpdate("DROP MATERIALIZED VIEW " + outerMaterializedViewName);
+        assertUpdate("DROP MATERIALIZED VIEW " + innerMaterializedViewName);
+        assertUpdate("DROP TABLE " + sourceTableName);
+    }
+
+    @Test
+    public void testForeignEngineRefreshWithNonDeterministicFunction()
+    {
+        String sourceTableName = "source_table_" + randomNameSuffix();
+        String materializedViewName = "test_mv_foreign_non_deterministic_" + randomNameSuffix();
+
+        assertUpdate("CREATE TABLE " + sourceTableName + " AS SELECT 1 a", 1);
+        assertUpdate("CREATE MATERIALIZED VIEW " + materializedViewName + " AS SELECT a, rand() r FROM " + sourceTableName);
+        assertUpdate("REFRESH MATERIALIZED VIEW " + materializedViewName, 1);
+
+        commitForeignRefreshState(materializedViewName, ImmutableList.of(foreignTableState(sourceTableName, "spark_catalog")));
+        assertFreshness(materializedViewName, "UNKNOWN");
+
+        assertUpdate("DROP MATERIALIZED VIEW " + materializedViewName);
+        assertUpdate("DROP TABLE " + sourceTableName);
+    }
+
+    @Test
+    public void testForeignEngineRefreshSkipsRefreshAndUsesStorageTable()
+    {
+        String schema = getSession().getSchema().orElseThrow();
+        String sourceTableName = "source_table_" + randomNameSuffix();
+        String materializedViewName = "test_mv_foreign_skip_refresh_" + randomNameSuffix();
+
+        assertUpdate("CREATE TABLE " + sourceTableName + " AS SELECT 1 a", 1);
+        assertUpdate("CREATE MATERIALIZED VIEW " + materializedViewName + " GRACE PERIOD INTERVAL '0' SECOND AS SELECT * FROM " + sourceTableName);
+        assertUpdate("REFRESH MATERIALIZED VIEW " + materializedViewName, 1);
+        commitForeignRefreshState(materializedViewName, ImmutableList.of(foreignTableState(sourceTableName, "spark_catalog")));
+
+        // The foreign refresh is known to be complete, so there is nothing to refresh
+        long snapshotId = getStorageTableMetadata(materializedViewName).currentSnapshot().snapshotId();
+        assertUpdate("REFRESH MATERIALIZED VIEW " + materializedViewName, 0);
+        assertThat(getStorageTableMetadata(materializedViewName).currentSnapshot().snapshotId()).isEqualTo(snapshotId);
+
+        // With a zero grace period, an unknown freshness would expand the materialized view into its query.
+        // The foreign refresh is known to be complete, so the query reads the storage table instead.
+        View view = backend.loadView(TableIdentifier.of(Namespace.of(schema), materializedViewName));
+        assertThat(query("SELECT * FROM " + materializedViewName)).matches("VALUES 1");
+        assertThat(getExplainPlan("SELECT * FROM " + materializedViewName, ExplainType.Type.IO))
+                .contains(view.currentVersion().storageTable().name())
+                .doesNotContain(sourceTableName);
+
+        assertUpdate("DROP MATERIALIZED VIEW " + materializedViewName);
+        assertUpdate("DROP TABLE " + sourceTableName);
+    }
+
+    private void commitForeignRefreshState(String materializedViewName, List<SourceState> sourceStates)
+    {
+        String schema = getSession().getSchema().orElseThrow();
+        View view = backend.loadView(TableIdentifier.of(Namespace.of(schema), materializedViewName));
+        RefreshState refreshState = new RefreshState(view.currentVersion().versionId(), sourceStates, Instant.now().toEpochMilli());
+        // Unlike a refresh by Trino, without the trino_query_id fingerprint
+        backend.loadTable(view.currentVersion().storageTable()).newAppend()
+                .set(RefreshState.REFRESH_STATE_SUMMARY_KEY, RefreshStateParser.toJson(refreshState))
+                .commit();
+    }
+
+    private SourceTableState foreignTableState(String tableName, String catalog)
+    {
+        return foreignTableState(TableIdentifier.of(Namespace.of(getSession().getSchema().orElseThrow()), tableName), catalog);
+    }
+
+    private SourceTableState foreignTableState(TableIdentifier tableIdentifier, String catalog)
+    {
+        Table table = backend.loadTable(tableIdentifier);
+        return new SourceTableState(
+                tableIdentifier.name(),
+                ImmutableList.copyOf(tableIdentifier.namespace().levels()),
+                catalog,
+                table.uuid().toString(),
+                table.currentSnapshot().snapshotId(),
+                SnapshotRef.MAIN_BRANCH);
+    }
+
+    private SourceViewState foreignViewState(String viewName, String catalog)
+    {
+        String schema = getSession().getSchema().orElseThrow();
+        View view = backend.loadView(TableIdentifier.of(Namespace.of(schema), viewName));
+        return new SourceViewState(viewName, ImmutableList.of(schema), catalog, view.uuid().toString(), view.currentVersion().versionId());
     }
 
     @Test

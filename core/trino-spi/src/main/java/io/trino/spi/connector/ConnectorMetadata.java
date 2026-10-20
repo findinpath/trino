@@ -1891,6 +1891,19 @@ public interface ConnectorMetadata
         return getMaterializedViewFreshness(session, name);
     }
 
+    /**
+     * Determines the freshness of a materialized view with the help of the relations its query depends on, as
+     * resolved by the engine. The engine calls this method only after
+     * {@link #getMaterializedViewFreshness(ConnectorSession, SchemaTableName, boolean)} returned a result for which
+     * {@link MaterializedViewFreshness#requiresSources()} is set.
+     *
+     * @throws MaterializedViewNotFoundException when materialized view is not found
+     */
+    default MaterializedViewFreshness getMaterializedViewFreshness(ConnectorSession session, SchemaTableName name, boolean considerGracePeriod, MaterializedViewSources sources)
+    {
+        return getMaterializedViewFreshness(session, name, considerGracePeriod);
+    }
+
     @Deprecated(forRemoval = true)
     default MaterializedViewFreshness getMaterializedViewFreshness(ConnectorSession session, SchemaTableName name)
     {

@@ -76,6 +76,8 @@ import io.trino.spi.connector.JoinStatistics;
 import io.trino.spi.connector.JoinType;
 import io.trino.spi.connector.LimitApplicationResult;
 import io.trino.spi.connector.MaterializedViewFreshness;
+import io.trino.spi.connector.MaterializedViewSource;
+import io.trino.spi.connector.MaterializedViewSources;
 import io.trino.spi.connector.ProjectionApplicationResult;
 import io.trino.spi.connector.RelationColumnsMetadata;
 import io.trino.spi.connector.RelationCommentMetadata;
@@ -1998,6 +2000,51 @@ public final class MetadataManager
             return metadata.getMaterializedViewFreshness(connectorSession, viewName.asSchemaTableName(), considerGracePeriod);
         }
         return new MaterializedViewFreshness(STALE, Optional.empty());
+    }
+
+    @Override
+    public MaterializedViewFreshness getMaterializedViewFreshness(Session session, QualifiedObjectName viewName, boolean considerGracePeriod, MaterializedViewDependencies dependencies)
+    {
+        Optional<CatalogMetadata> catalog = getOptionalCatalogMetadata(session, viewName.catalogName());
+        if (catalog.isPresent()) {
+            CatalogMetadata catalogMetadata = catalog.get();
+            CatalogHandle catalogHandle = catalogMetadata.getCatalogHandle(session, viewName, Optional.empty(), Optional.empty());
+            ConnectorMetadata metadata = catalogMetadata.getMetadataFor(session, catalogHandle);
+
+            ConnectorSession connectorSession = session.toConnectorSession(catalogHandle);
+            MaterializedViewSources sources = new MaterializedViewSources(
+                    toMaterializedViewSources(catalogHandle, dependencies.dependencies()),
+                    dependencies.hasSourceTableFunctions(),
+                    dependencies.hasNonDeterministicFunctions());
+            return metadata.getMaterializedViewFreshness(connectorSession, viewName.asSchemaTableName(), considerGracePeriod, sources);
+        }
+        return new MaterializedViewFreshness(STALE, Optional.empty());
+    }
+
+    private static List<MaterializedViewSource> toMaterializedViewSources(CatalogHandle catalogHandle, List<MaterializedViewDependency> dependencies)
+    {
+        return dependencies.stream()
+                .map(dependency -> toMaterializedViewSource(catalogHandle, dependency))
+                .collect(toImmutableList());
+    }
+
+    private static MaterializedViewSource toMaterializedViewSource(CatalogHandle catalogHandle, MaterializedViewDependency dependency)
+    {
+        // Connectors only receive handles of their own catalog
+        return switch (dependency) {
+            case MaterializedViewDependency.Table table when table.handle().catalogHandle().equals(catalogHandle) ->
+                    new MaterializedViewSource.Table(table.handle().connectorHandle());
+            case MaterializedViewDependency.View view when view.handle().catalogHandle().equals(catalogHandle) ->
+                    new MaterializedViewSource.View(view.handle().connectorHandle(), toMaterializedViewSources(catalogHandle, view.dependencies()));
+            case MaterializedViewDependency.MaterializedView materializedView when materializedView.handle().catalogHandle().equals(catalogHandle) ->
+                    new MaterializedViewSource.MaterializedView(
+                            materializedView.handle().connectorHandle(),
+                            materializedView.storageTable()
+                                    .filter(storageTable -> storageTable.catalogHandle().equals(catalogHandle))
+                                    .map(TableHandle::connectorHandle),
+                            toMaterializedViewSources(catalogHandle, materializedView.dependencies()));
+            default -> new MaterializedViewSource.Foreign(dependency.name().asCatalogSchemaTableName());
+        };
     }
 
     @Override

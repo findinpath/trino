@@ -769,7 +769,9 @@ class StatementAnalyzer
             TableHandle targetTableHandle = metadata.getTableHandle(session, targetTable)
                     .orElseThrow(() -> semanticException(TABLE_NOT_FOUND, refreshMaterializedView, "Table '%s' does not exist", targetTable));
 
-            analysis.setSkipMaterializedViewRefresh(metadata.getMaterializedViewFreshness(session, name, false).getFreshness() == FRESH);
+            MaterializedViewFreshness freshness = statementAnalyzerFactory.createMaterializedViewFreshnessChecker()
+                    .verifyMaterializedViewFreshness(session, name, view, false, metadata.getMaterializedViewFreshness(session, name, false));
+            analysis.setSkipMaterializedViewRefresh(freshness.getFreshness() == FRESH);
 
             TableMetadata tableMetadata = metadata.getTableMetadata(session, targetTableHandle);
             List<String> insertColumns = tableMetadata.columns().stream()
@@ -2411,8 +2413,20 @@ class StatementAnalyzer
             if (optionalMaterializedView.isPresent()) {
                 MaterializedViewDefinition materializedViewDefinition = optionalMaterializedView.get();
                 analysis.addEmptyColumnReferencesForTable(accessControl, session.getIdentity(), name, getBranchName(table));
-                analysis.recordReferencedView(metadata.getViewHandle(session, name)
-                        .orElseThrow(() -> semanticException(INVALID_VIEW, table, "Materialized view '%s' does not exist", name)));
+                ViewHandle materializedViewHandle = metadata.getViewHandle(session, name)
+                        .orElseThrow(() -> semanticException(INVALID_VIEW, table, "Materialized view '%s' does not exist", name));
+                analysis.recordReferencedView(materializedViewHandle);
+                Optional<MaterializedViewDependencyCollector> dependencyCollector = analysis.getMaterializedViewDependencyCollector();
+                if (dependencyCollector.isPresent()) {
+                    // Collecting dependencies: expand the materialized view regardless of its freshness, and record its storage table alongside
+                    Optional<TableHandle> storageTable = getMaterializedViewStorageTableName(materializedViewDefinition)
+                            .map(storageName -> createQualifiedObjectName(session, table, storageName))
+                            .flatMap(storageTableName -> metadata.getTableHandle(session, storageTableName));
+                    dependencyCollector.get().beginMaterializedView(name, materializedViewHandle, storageTable);
+                    Scope materializedViewScope = createScopeForMaterializedView(table, name, scope, materializedViewDefinition, Optional.empty());
+                    dependencyCollector.get().endView();
+                    return materializedViewScope;
+                }
                 if (isMaterializedViewSufficientlyFresh(session, name, materializedViewDefinition)) {
                     // If materialized view is sufficiently fresh with respect to its grace period, answer the query using the storage table
                     QualifiedName storageName = getMaterializedViewStorageTableName(materializedViewDefinition)
@@ -2439,8 +2453,16 @@ class StatementAnalyzer
 
                 QualifiedObjectName targetViewName = viewRedirection.redirectedTableName().orElse(name);
                 analysis.addEmptyColumnReferencesForTable(accessControl, session.getIdentity(), targetViewName, getBranchName(table));
-                analysis.recordReferencedView(metadata.getViewHandle(session, targetViewName)
-                        .orElseThrow(() -> semanticException(INVALID_VIEW, table, "View '%s' does not exist", targetViewName)));
+                ViewHandle viewHandle = metadata.getViewHandle(session, targetViewName)
+                        .orElseThrow(() -> semanticException(INVALID_VIEW, table, "View '%s' does not exist", targetViewName));
+                analysis.recordReferencedView(viewHandle);
+                Optional<MaterializedViewDependencyCollector> dependencyCollector = analysis.getMaterializedViewDependencyCollector();
+                if (dependencyCollector.isPresent()) {
+                    dependencyCollector.get().beginView(targetViewName, viewHandle);
+                    Scope viewScope = createScopeForView(table, targetViewName, scope, optionalView.get());
+                    dependencyCollector.get().endView();
+                    return viewScope;
+                }
                 return createScopeForView(table, targetViewName, scope, optionalView.get());
             }
 
@@ -2466,6 +2488,8 @@ class StatementAnalyzer
                 }
                 throw semanticException(TABLE_NOT_FOUND, table, "Table '%s' does not exist", targetTableName);
             }
+            analysis.getMaterializedViewDependencyCollector()
+                    .ifPresent(collector -> collector.addTable(targetTableName, tableHandle.get()));
             TableSchema tableSchema = metadata.getTableSchema(session, tableHandle.get());
             Map<String, ColumnHandle> columnHandles = metadata.getColumnHandles(session, tableHandle.get());
 
@@ -2512,6 +2536,21 @@ class StatementAnalyzer
             // so that this special case is handled in the analyzer rather than duplicating the logic across all connectors.
             boolean considerGracePeriod = !gracePeriodZero;
             MaterializedViewFreshness materializedViewFreshness = metadata.getMaterializedViewFreshness(session, name, considerGracePeriod);
+            boolean sufficientlyFresh = isSufficientlyFresh(session, materializedViewDefinition, materializedViewFreshness);
+            if (sufficientlyFresh || !materializedViewFreshness.requiresSources()) {
+                return sufficientlyFresh;
+            }
+            // The connector needs the relations the materialized view query depends on to tell whether it is fresh
+            materializedViewFreshness = statementAnalyzerFactory.createMaterializedViewFreshnessChecker()
+                    .verifyMaterializedViewFreshness(session, name, materializedViewDefinition, considerGracePeriod, materializedViewFreshness);
+            return isSufficientlyFresh(session, materializedViewDefinition, materializedViewFreshness);
+        }
+
+        private static boolean isSufficientlyFresh(Session session, MaterializedViewDefinition materializedViewDefinition, MaterializedViewFreshness materializedViewFreshness)
+        {
+            boolean gracePeriodZero = materializedViewDefinition.getGracePeriod()
+                    .map(Duration::isZero)
+                    .orElse(false);
             MaterializedViewFreshness.Freshness freshness = materializedViewFreshness.getFreshness();
 
             if (freshness == FRESH || freshness == FRESH_WITHIN_GRACE_PERIOD) {

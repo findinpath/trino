@@ -26,6 +26,7 @@ import io.trino.spi.connector.ConnectorTableHandle;
 import io.trino.spi.connector.ConnectorViewDefinition;
 import io.trino.spi.connector.ConnectorViewHandle;
 import io.trino.spi.connector.MaterializedViewFreshness;
+import io.trino.spi.connector.MaterializedViewSources;
 import io.trino.spi.connector.RelationColumnsMetadata;
 import io.trino.spi.connector.RelationCommentMetadata;
 import io.trino.spi.connector.RelationType;
@@ -250,6 +251,15 @@ public interface TrinoCatalog
     default MaterializedViewFreshness getMaterializedViewFreshness(ConnectorSession session, SchemaTableName materializedViewName, boolean considerGracePeriod)
     {
         throw new TrinoException(NOT_SUPPORTED, "This connector does not support materialized views");
+    }
+
+    /**
+     * Called by the engine when {@link #getMaterializedViewFreshness(ConnectorSession, SchemaTableName, boolean)} asked
+     * for the relations the materialized view query depends on.
+     */
+    default MaterializedViewFreshness getMaterializedViewFreshness(ConnectorSession session, SchemaTableName materializedViewName, boolean considerGracePeriod, MaterializedViewSources sources)
+    {
+        return getMaterializedViewFreshness(session, materializedViewName, considerGracePeriod);
     }
 
     default void recordMaterializedViewRefresh(

@@ -55,6 +55,8 @@ import io.trino.spi.connector.ConnectorViewDefinition;
 import io.trino.spi.connector.ConnectorViewHandle;
 import io.trino.spi.connector.MaterializedViewFreshness;
 import io.trino.spi.connector.MaterializedViewNotFoundException;
+import io.trino.spi.connector.MaterializedViewSource;
+import io.trino.spi.connector.MaterializedViewSources;
 import io.trino.spi.connector.RelationColumnsMetadata;
 import io.trino.spi.connector.RelationCommentMetadata;
 import io.trino.spi.connector.RelationType;
@@ -65,6 +67,7 @@ import io.trino.spi.connector.ViewNotFoundException;
 import io.trino.spi.security.TrinoPrincipal;
 import io.trino.spi.type.Type;
 import io.trino.spi.type.TypeManager;
+import jakarta.annotation.Nullable;
 import org.apache.iceberg.AppendFiles;
 import org.apache.iceberg.BaseTable;
 import org.apache.iceberg.PartitionSpec;
@@ -113,6 +116,7 @@ import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.OptionalLong;
 import java.util.Set;
@@ -1370,6 +1374,17 @@ public class TrinoRestCatalog
     @Override
     public MaterializedViewFreshness getMaterializedViewFreshness(ConnectorSession session, SchemaTableName materializedViewName, boolean considerGracePeriod)
     {
+        return getMaterializedViewFreshness(session, materializedViewName, considerGracePeriod, Optional.empty());
+    }
+
+    @Override
+    public MaterializedViewFreshness getMaterializedViewFreshness(ConnectorSession session, SchemaTableName materializedViewName, boolean considerGracePeriod, MaterializedViewSources sources)
+    {
+        return getMaterializedViewFreshness(session, materializedViewName, considerGracePeriod, Optional.of(sources));
+    }
+
+    private MaterializedViewFreshness getMaterializedViewFreshness(ConnectorSession session, SchemaTableName materializedViewName, boolean considerGracePeriod, Optional<MaterializedViewSources> sources)
+    {
         Optional<View> view = getIcebergView(session, materializedViewName, false);
         if (view.isEmpty()) {
             // View not found, might have been concurrently deleted
@@ -1409,107 +1424,239 @@ public class TrinoRestCatalog
             return new MaterializedViewFreshness(UNKNOWN, Optional.of(refreshTime));
         }
 
-        // A refresh this catalog didn't itself perform could have used a non-deterministic function or a
-        // foreign-connector source that RefreshState's structural comparison alone cannot detect.
+        // A refresh this catalog performed records every dependency, or marks the freshness unknown above. Another
+        // engine may record only some of the dependencies (or none), and may have used a non-deterministic function
+        // or a foreign-connector source that the recorded source states cannot reveal.
         boolean refreshedByTrino = summary.containsKey(TRINO_QUERY_ID_NAME);
 
         if (considerGracePeriod && refreshedByTrino && withinGracePeriod(session.getStart(), refreshTime, definition.get().getGracePeriod())) {
             return new MaterializedViewFreshness(FRESH_WITHIN_GRACE_PERIOD, Optional.empty());
         }
 
+        SourceStatesVerification verification = verifySourceStates(session, refreshState.sourceStates());
+        if (verification.stale()) {
+            return new MaterializedViewFreshness(STALE, Optional.of(refreshTime));
+        }
+
+        if (refreshedByTrino) {
+            if (verification.unknown()) {
+                return new MaterializedViewFreshness(UNKNOWN, Optional.of(refreshTime));
+            }
+            return new MaterializedViewFreshness(FRESH, Optional.empty());
+        }
+
+        if (sources.isEmpty()) {
+            // Ask the engine for the relations the materialized view query depends on, to check every one of them was recorded
+            return new MaterializedViewFreshness(UNKNOWN, Optional.of(refreshTime), true);
+        }
+        if (sources.get().hasSourceTableFunctions() || sources.get().hasNonDeterministicFunctions()) {
+            return new MaterializedViewFreshness(UNKNOWN, Optional.of(refreshTime));
+        }
+        // Recorded source states that could not be verified don't matter, as long as every relation the query depends on is covered
+        boolean allSourcesRecorded = sources.get().sources().stream()
+                .allMatch(source -> isRecorded(session, source, verification));
+        if (!allSourcesRecorded) {
+            return new MaterializedViewFreshness(UNKNOWN, Optional.of(refreshTime));
+        }
+        return new MaterializedViewFreshness(FRESH, Optional.empty());
+    }
+
+    /**
+     * Checks the recorded source states against the current state of the sources. Source states recorded against
+     * another catalog name are matched by UUID, as the catalog name recorded by another engine is local to that engine.
+     */
+    private SourceStatesVerification verifySourceStates(ConnectorSession session, List<SourceState> sourceStates)
+    {
         boolean hasStaleSources = false;
         boolean hasUnknownSources = false;
-        for (SourceState sourceState : refreshState.sourceStates()) {
+        ImmutableMap.Builder<String, SourceTableState> verifiedTables = ImmutableMap.builder();
+        ImmutableMap.Builder<String, SourceViewState> verifiedViews = ImmutableMap.builder();
+        for (SourceState sourceState : sourceStates) {
             if (sourceState instanceof SourceTableState tableState) {
-                if (tableState.catalog() != null && !tableState.catalog().equals(catalogName.toString())) {
-                    // Recorded against a different Trino catalog; this catalog cannot verify it
-                    hasUnknownSources = true;
-                    continue;
-                }
+                boolean otherCatalog = tableState.catalog() != null && !tableState.catalog().equals(catalogName.toString());
                 SchemaTableName sourceTableName = SchemaTableName.schemaTableName(String.join(NAMESPACE_SEPARATOR, tableState.namespace()), tableState.name());
                 Table sourceTable;
                 try {
                     sourceTable = loadTable(session, sourceTableName);
                 }
                 catch (RuntimeException e) {
-                    // Base table is gone, or corrupted, or can't otherwise be resolved: treat conservatively as changed
-                    hasStaleSources = true;
+                    if (otherCatalog) {
+                        // The table may only exist in the other catalog: this catalog cannot verify it
+                        hasUnknownSources = true;
+                    }
+                    else {
+                        // Base table is gone, or corrupted, or can't otherwise be resolved: treat conservatively as changed
+                        hasStaleSources = true;
+                    }
                     continue;
                 }
                 if (!tableState.uuid().equals(sourceTable.uuid().toString())) {
-                    // Table was dropped and re-created since the last refresh
-                    hasStaleSources = true;
-                    continue;
-                }
-                Long recordedSnapshotId = tableState.snapshotId();
-                String recordedBranch = tableState.ref();
-                if (recordedBranch != null) {
-                    // The source was read through a branch or tag: stale once it advances past the recorded snapshot.
-                    SnapshotRef ref = sourceTable.refs().get(recordedBranch);
-                    if (ref == null) {
-                        // The branch was dropped or renamed since the last refresh
-                        hasStaleSources = true;
-                        continue;
-                    }
-                    if (recordedSnapshotId == null || ref.snapshotId() != recordedSnapshotId) {
-                        hasStaleSources = true;
+                    if (otherCatalog) {
+                        // A different table of the same name: the recorded one may only exist in the other catalog
+                        hasUnknownSources = true;
                     }
                     else {
-                        // A schema-only change (rename, added column, etc.) doesn't bump the snapshot id.
-                        Snapshot recordedSnapshot = sourceTable.snapshot(recordedSnapshotId);
-                        Integer recordedSchemaId = recordedSnapshot == null ? null : recordedSnapshot.schemaId();
-                        if (recordedSchemaId != null && !recordedSchemaId.equals(sourceTable.schema().schemaId())) {
-                            hasStaleSources = true;
-                        }
-                    }
-                }
-                else {
-                    // No branch recorded: the source was read as of a fixed snapshot (e.g. FOR VERSION AS OF), or had
-                    // no snapshot at all at refresh time. The view stays fresh with respect to this source as long
-                    // as that same snapshot (or lack thereof) still holds, regardless of newer snapshots committed since.
-                    if (recordedSnapshotId == null) {
-                        if (sourceTable.currentSnapshot() != null) {
-                            hasStaleSources = true;
-                        }
-                    }
-                    else if (sourceTable.snapshot(recordedSnapshotId) == null) {
-                        // The pinned snapshot has since expired or been removed.
+                        // Table was dropped and re-created since the last refresh
                         hasStaleSources = true;
                     }
+                    continue;
                 }
+                if (isSourceTableStale(tableState, sourceTable)) {
+                    hasStaleSources = true;
+                    continue;
+                }
+                verifiedTables.put(tableState.uuid(), tableState);
             }
             else if (sourceState instanceof SourceViewState viewState) {
-                if (viewState.catalog() != null && !viewState.catalog().equals(catalogName.toString())) {
-                    // Recorded against a different Trino catalog; this catalog cannot verify it
-                    hasUnknownSources = true;
-                    continue;
-                }
+                boolean otherCatalog = viewState.catalog() != null && !viewState.catalog().equals(catalogName.toString());
                 SchemaTableName sourceViewName = SchemaTableName.schemaTableName(String.join(NAMESPACE_SEPARATOR, viewState.namespace()), viewState.name());
                 Optional<View> sourceView = getIcebergView(session, sourceViewName, true);
-                if (sourceView.isEmpty()) {
-                    // View is gone, or corrupted, or can't otherwise be resolved: treat conservatively as changed
-                    hasStaleSources = true;
-                    continue;
-                }
-                if (!viewState.uuid().equals(sourceView.get().uuid().toString())) {
-                    // View was dropped and re-created since the last refresh
-                    hasStaleSources = true;
+                if (sourceView.isEmpty() || !viewState.uuid().equals(sourceView.get().uuid().toString())) {
+                    if (otherCatalog) {
+                        // The view may only exist in the other catalog: this catalog cannot verify it
+                        hasUnknownSources = true;
+                    }
+                    else {
+                        // View is gone, or was dropped and re-created since the last refresh: treat conservatively as changed
+                        hasStaleSources = true;
+                    }
                     continue;
                 }
                 if (sourceView.get().currentVersion().versionId() != viewState.versionId()) {
                     // View definition was replaced since the last refresh
                     hasStaleSources = true;
+                    continue;
                 }
+                verifiedViews.put(viewState.uuid(), viewState);
             }
         }
+        return new SourceStatesVerification(hasStaleSources, hasUnknownSources, verifiedTables.buildKeepingLast(), verifiedViews.buildKeepingLast());
+    }
 
-        if (hasStaleSources) {
-            return new MaterializedViewFreshness(STALE, Optional.of(refreshTime));
+    private static boolean isSourceTableStale(SourceTableState tableState, Table sourceTable)
+    {
+        Long recordedSnapshotId = tableState.snapshotId();
+        String recordedBranch = tableState.ref();
+        if (recordedBranch != null) {
+            // The source was read through a branch or tag: stale once it advances past the recorded snapshot.
+            SnapshotRef ref = sourceTable.refs().get(recordedBranch);
+            if (ref == null) {
+                // The branch was dropped or renamed since the last refresh
+                return true;
+            }
+            if (recordedSnapshotId == null || ref.snapshotId() != recordedSnapshotId) {
+                return true;
+            }
+            // A schema-only change (rename, added column, etc.) doesn't bump the snapshot id.
+            Snapshot recordedSnapshot = sourceTable.snapshot(recordedSnapshotId);
+            Integer recordedSchemaId = recordedSnapshot == null ? null : recordedSnapshot.schemaId();
+            return recordedSchemaId != null && !recordedSchemaId.equals(sourceTable.schema().schemaId());
         }
-        if (hasUnknownSources || !refreshedByTrino) {
-            return new MaterializedViewFreshness(UNKNOWN, Optional.of(refreshTime));
+        // No branch recorded: the source was read as of a fixed snapshot (e.g. FOR VERSION AS OF), or had
+        // no snapshot at all at refresh time. The view stays fresh with respect to this source as long
+        // as that same snapshot (or lack thereof) still holds, regardless of newer snapshots committed since.
+        if (recordedSnapshotId == null) {
+            return sourceTable.currentSnapshot() != null;
         }
-        return new MaterializedViewFreshness(FRESH, Optional.empty());
+        // Stale once the pinned snapshot has expired or been removed.
+        return sourceTable.snapshot(recordedSnapshotId) == null;
+    }
+
+    /**
+     * Whether the recorded source states cover the given relation the materialized view query depends on. A nested
+     * materialized view is covered either by its storage table, or by the relations its own query depends on.
+     */
+    private boolean isRecorded(ConnectorSession session, MaterializedViewSource source, SourceStatesVerification verification)
+    {
+        return switch (source) {
+            case MaterializedViewSource.Table table -> isTableRecorded(session, table.handle(), verification);
+            case MaterializedViewSource.View view -> isViewRecorded(view.handle(), verification)
+                    && view.sources().stream().allMatch(nested -> isRecorded(session, nested, verification));
+            case MaterializedViewSource.MaterializedView materializedView -> isViewRecorded(materializedView.handle(), verification)
+                    && (materializedView.storageTable().map(storageTable -> isTableRecorded(session, storageTable, verification)).orElse(false)
+                    || materializedView.sources().stream().allMatch(nested -> isRecorded(session, nested, verification)));
+            // Not something this catalog can verify
+            case MaterializedViewSource.Foreign _ -> false;
+        };
+    }
+
+    private boolean isTableRecorded(ConnectorSession session, ConnectorTableHandle handle, SourceStatesVerification verification)
+    {
+        if (!(handle instanceof IcebergTableHandle tableHandle)) {
+            return false;
+        }
+        Table table;
+        try {
+            table = loadTable(session, tableHandle.getSchemaTableName());
+        }
+        catch (RuntimeException e) {
+            return false;
+        }
+        SourceTableState tableState = verification.tables().get(table.uuid().toString());
+        if (tableState == null) {
+            return false;
+        }
+        // The table must be recorded as read the same way the materialized view query reads it
+        Optional<SourceTableReference> reference = sourceTableReference(tableHandle, table);
+        if (reference.isEmpty() || !Objects.equals(tableState.ref(), reference.get().ref())) {
+            return false;
+        }
+        // For a branch or tag, the recorded snapshot was already verified to be its current one
+        return tableState.ref() != null || Objects.equals(tableState.snapshotId(), reference.get().snapshotId());
+    }
+
+    private static boolean isViewRecorded(ConnectorViewHandle handle, SourceStatesVerification verification)
+    {
+        if (!(handle instanceof IcebergViewHandle viewHandle)) {
+            return false;
+        }
+        SourceViewState viewState = verification.views().get(viewHandle.uuid());
+        return viewState != null && viewState.versionId() == viewHandle.versionId();
+    }
+
+    /**
+     * How a source table is read by a materialized view query: through a branch or tag ({@code ref} set), or pinned to a
+     * snapshot ({@code ref} not set; {@code snapshotId} is null when the table had no snapshot). Empty when the branch
+     * or tag the query reads no longer exists.
+     */
+    private static Optional<SourceTableReference> sourceTableReference(IcebergTableHandle tableHandle, Table table)
+    {
+        Optional<String> branch = tableHandle.getBranch();
+        if (branch.isPresent()) {
+            // Explicit named branch/tag reference (e.g. FOR VERSION AS OF '<branch-name>')
+            SnapshotRef ref = table.refs().get(branch.get());
+            if (ref == null) {
+                return Optional.empty();
+            }
+            return Optional.of(new SourceTableReference(ref.snapshotId(), branch.get()));
+        }
+        if (tableHandle.getSnapshotId().isPresent()) {
+            if (tableHandle.getSpecId().isPresent()) {
+                // An ordinary, unqualified read implicitly tracks the main branch
+                return Optional.of(new SourceTableReference(tableHandle.getSnapshotId().getAsLong(), SnapshotRef.MAIN_BRANCH));
+            }
+            // The partitioning spec is unknown, which IcebergTableHandle only leaves unresolved for a
+            // time-travel read (e.g. FOR VERSION AS OF <snapshot-id>): no branch to track
+            return Optional.of(new SourceTableReference(tableHandle.getSnapshotId().getAsLong(), null));
+        }
+        Snapshot currentSnapshot = table.currentSnapshot();
+        if (currentSnapshot == null) {
+            // No snapshot to record a dependency against
+            return Optional.of(new SourceTableReference(null, null));
+        }
+        // An ordinary, unqualified read implicitly tracks the main branch: stale once main advances.
+        return Optional.of(new SourceTableReference(currentSnapshot.snapshotId(), SnapshotRef.MAIN_BRANCH));
+    }
+
+    private record SourceTableReference(@Nullable Long snapshotId, @Nullable String ref) {}
+
+    private record SourceStatesVerification(boolean stale, boolean unknown, Map<String, SourceTableState> tables, Map<String, SourceViewState> views)
+    {
+        private SourceStatesVerification
+        {
+            tables = ImmutableMap.copyOf(requireNonNull(tables, "tables is null"));
+            views = ImmutableMap.copyOf(requireNonNull(views, "views is null"));
+        }
     }
 
     private static boolean withinGracePeriod(Instant sessionStart, Instant refreshTime, Optional<Duration> gracePeriod)
@@ -1540,52 +1687,20 @@ public class TrinoRestCatalog
             IcebergTableHandle sourceTableHandle = (IcebergTableHandle) handle;
             SchemaTableName sourceTableName = sourceTableHandle.getSchemaTableName();
             Table sourceTable = loadTable(session, sourceTableName);
-            Optional<String> branch = sourceTableHandle.getBranch();
-            Long currentSnapshotId;
-            String recordedBranch;
-            if (branch.isPresent()) {
-                // Explicit named branch/tag reference (e.g. FOR VERSION AS OF '<branch-name>')
-                SnapshotRef ref = sourceTable.refs().get(branch.get());
-                if (ref == null) {
-                    throw new TrinoException(ICEBERG_CATALOG_ERROR, "Branch '%s' no longer exists on source table '%s'".formatted(branch.get(), sourceTableName));
-                }
-                currentSnapshotId = ref.snapshotId();
-                recordedBranch = branch.get();
-            }
-            else if (sourceTableHandle.getSnapshotId().isPresent()) {
-                currentSnapshotId = sourceTableHandle.getSnapshotId().orElseThrow();
-                if (sourceTableHandle.getSpecId().isPresent()) {
-                    // An ordinary, unqualified read implicitly tracks the main branch
-                    recordedBranch = SnapshotRef.MAIN_BRANCH;
-                }
-                else {
-                    // The partitioning spec is unknown, which IcebergTableHandle only leaves unresolved for a
-                    // time-travel read (e.g. FOR VERSION AS OF <snapshot-id>): no branch to track
-                    recordedBranch = null;
-                }
-            }
-            else {
-                Snapshot currentSnapshot = sourceTable.currentSnapshot();
-                if (currentSnapshot == null) {
-                    // No snapshot to record a dependency against; record the table with a null snapshot id
-                    // and fall back to unknown freshness rather than dropping the dependency entirely.
-                    hasSourceTableWithNoSnapshots = true;
-                    currentSnapshotId = null;
-                    recordedBranch = null;
-                }
-                else {
-                    // An ordinary, unqualified read implicitly tracks the main branch: stale once main advances.
-                    currentSnapshotId = currentSnapshot.snapshotId();
-                    recordedBranch = SnapshotRef.MAIN_BRANCH;
-                }
+            SourceTableReference reference = sourceTableReference(sourceTableHandle, sourceTable)
+                    .orElseThrow(() -> new TrinoException(ICEBERG_CATALOG_ERROR, "Branch '%s' no longer exists on source table '%s'".formatted(sourceTableHandle.getBranch().orElseThrow(), sourceTableName)));
+            if (reference.snapshotId() == null) {
+                // No snapshot to record a dependency against; record the table with a null snapshot id
+                // and fall back to unknown freshness rather than dropping the dependency entirely.
+                hasSourceTableWithNoSnapshots = true;
             }
             sourceStates.add(new SourceTableState(
                     sourceTableName.getTableName(),
                     ImmutableList.copyOf(toNamespace(sourceTableName.getSchemaName()).levels()),
                     catalogName.toString(),
                     sourceTable.uuid().toString(),
-                    currentSnapshotId,
-                    recordedBranch));
+                    reference.snapshotId(),
+                    reference.ref()));
         }
 
         boolean hasUnverifiedSourceViews = hasForeignSourceRelations;
